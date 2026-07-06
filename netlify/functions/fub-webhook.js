@@ -55,7 +55,11 @@ exports.handler = async (event) => {
   }
 
   const addedAt = payload.eventCreated || new Date().toISOString();
-  const store = getStore("zhl-tag-events");
+  const store = getStore({
+    name: "zhl-tag-events",
+    siteID: process.env.SITE_ID,
+    token: process.env.NETLIFY_AUTH_TOKEN,
+  });
   const existing = (await store.get("events", { type: "json" })) || [];
 
   const newEntries = [];

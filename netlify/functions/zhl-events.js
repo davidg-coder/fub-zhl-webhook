@@ -13,7 +13,11 @@ exports.handler = async (event) => {
     return { statusCode: 401, body: "Unauthorized" };
   }
 
-  const store = getStore("zhl-tag-events");
+  const store = getStore({
+    name: "zhl-tag-events",
+    siteID: process.env.SITE_ID,
+    token: process.env.NETLIFY_AUTH_TOKEN,
+  });
   const events = (await store.get("events", { type: "json" })) || [];
 
   return {
