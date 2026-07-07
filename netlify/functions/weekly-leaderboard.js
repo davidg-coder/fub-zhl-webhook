@@ -37,7 +37,7 @@ function buildLeaderboardText(events, currentWeekKey) {
   return `*🏆 Weekly Leaderboard* — Appointment Set + Under Contract moves\n${lines.join("\n")}`;
 }
 
-const handler = async () => {
+const handler = async (event) => {
   const now = new Date();
   const pacific = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
@@ -49,7 +49,11 @@ const handler = async () => {
   const weekday = pacific.find((p) => p.type === "weekday").value;
   const hour = parseInt(pacific.find((p) => p.type === "hour").value, 10);
 
-  if (weekday !== "Fri" || hour !== 8) {
+  // ?test=1 lets us manually verify the ranking output without waiting for
+  // Friday 8 AM — remove once this has been confirmed working end-to-end.
+  const isTest = event && event.queryStringParameters && event.queryStringParameters.test === "1";
+
+  if (!isTest && (weekday !== "Fri" || hour !== 8)) {
     return { statusCode: 200, body: `skipped — Pacific is ${weekday} ${hour}:00, waiting for Fri 8:00` };
   }
 
