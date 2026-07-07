@@ -1,7 +1,10 @@
 // Runs hourly. FUB has no "task became overdue" webhook, so this polls for
 // incomplete tasks whose due date is 48h+ in the past and pings Slack the
-// first time each task crosses that line — a Netlify Blobs store of already-
-// alerted task IDs keeps it from repeating the same alert every hour.
+// first time each task crosses that line. The account has a large existing
+// backlog of stale tasks (created before this went live), so this only ever
+// looks at tasks created after `since` (set once, on first run) — the
+// backlog is permanently excluded, not just skipped on day one. A Netlify
+// Blobs store of already-alerted task IDs keeps it from repeating.
 const { schedule } = require("@netlify/functions");
 const { getStore } = require("@netlify/blobs");
 
@@ -16,13 +19,14 @@ function iso(d) {
   return d.toISOString().replace(/\.\d+Z$/, "Z");
 }
 
-async function fetchOverdueTasks(cutoff) {
+async function fetchOverdueTasks(cutoff, since) {
   const tasks = [];
   let next = null;
   do {
     const url = new URL(`${FUB_BASE}/tasks`);
     url.searchParams.set("isCompleted", "false");
     url.searchParams.set("dueDateBefore", iso(cutoff));
+    url.searchParams.set("createdAfter", since);
     url.searchParams.set("limit", "100");
     if (next) url.searchParams.set("next", next);
     const res = await fetch(url, { headers: { Authorization: authHeader() } });
@@ -30,7 +34,7 @@ async function fetchOverdueTasks(cutoff) {
     const data = await res.json();
     tasks.push(...(data.tasks || []));
     next = data._metadata && data._metadata.next;
-  } while (next && tasks.length < 500);
+  } while (next && tasks.length < 1000);
   return tasks;
 }
 
@@ -40,25 +44,24 @@ const handler = async () => {
     return { statusCode: 500, body: "SLACK_WEBHOOK_URL or FUB_API_KEY not configured" };
   }
 
-  const cutoff = new Date(Date.now() - OVERDUE_HOURS * 3600 * 1000);
-  const tasks = await fetchOverdueTasks(cutoff);
-
   const store = getStore({
     name: "overdue-task-alerts",
     siteID: process.env.SITE_ID,
     token: process.env.NETLIFY_AUTH_TOKEN,
   });
-  const stored = await store.get("ids", { type: "json" });
 
-  // First run ever: the account already has a backlog of old overdue tasks.
-  // Seed the seen-list with today's backlog (no Slack spam for pre-existing
-  // tasks) and only alert on tasks that cross the 48h line from now on.
-  if (stored === null) {
-    await store.setJSON("ids", tasks.map((t) => t.id));
-    return { statusCode: 200, body: `seeded baseline with ${tasks.length} existing overdue tasks` };
+  let since = await store.get("since", { type: "text" });
+  if (!since) {
+    since = iso(new Date());
+    await store.setJSON("ids", []);
+    await store.set("since", since);
+    return { statusCode: 200, body: `initialized — only watching tasks created after ${since}` };
   }
 
-  const alerted = new Set(stored);
+  const cutoff = new Date(Date.now() - OVERDUE_HOURS * 3600 * 1000);
+  const tasks = await fetchOverdueTasks(cutoff, since);
+
+  const alerted = new Set((await store.get("ids", { type: "json" })) || []);
   const newlyOverdue = tasks.filter((t) => !alerted.has(t.id));
 
   for (const task of newlyOverdue) {

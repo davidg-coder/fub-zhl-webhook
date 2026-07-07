@@ -25,8 +25,11 @@ timestamp anywhere else).
   falling apart" signal), and logs every stage change to a Blobs store that
   `weekly-leaderboard.js` reads.
 - `netlify/functions/overdue-escalation.js` — scheduled function (runs hourly)
-  that pings Slack the first time a task crosses 48 hours overdue. A Blobs
-  store of already-alerted task IDs keeps it from repeating.
+  that pings Slack the first time a task crosses 48 hours overdue. Only
+  applies to tasks created after this function's first run — the account's
+  existing backlog of stale tasks is permanently excluded, not just skipped
+  on day one. A Blobs store of already-alerted task IDs keeps it from
+  repeating.
 - `netlify/functions/weekly-leaderboard.js` — scheduled function (runs hourly,
   only sends Friday 8 AM Pacific) that ranks agents by how many leads they
   moved to Appointment Set / Under Contract during the current week, using
