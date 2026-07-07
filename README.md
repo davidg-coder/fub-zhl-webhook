@@ -19,6 +19,18 @@ timestamp anywhere else).
   webhook, looks up who each new lead is assigned to, and fires a Slack alert
   the moment an agent is assigned their 5th new lead in the current week
   (Monday–Sunday, Pacific time).
+- `netlify/functions/stage-webhook.js` — receives FUB's `peopleStageUpdated`
+  webhook. Fires an instant Slack alert when a lead moves *backward* in the
+  pipeline (e.g. Under Contract → Showing Homes — a strong "this deal is
+  falling apart" signal), and logs every stage change to a Blobs store that
+  `weekly-leaderboard.js` reads.
+- `netlify/functions/overdue-escalation.js` — scheduled function (runs hourly)
+  that pings Slack the first time a task crosses 48 hours overdue. A Blobs
+  store of already-alerted task IDs keeps it from repeating.
+- `netlify/functions/weekly-leaderboard.js` — scheduled function (runs hourly,
+  only sends Friday 8 AM Pacific) that ranks agents by how many leads they
+  moved to Appointment Set / Under Contract during the current week, using
+  the log from `stage-webhook.js`.
 
 Only tags added **after** this webhook is registered with FUB will have a real
 date. Tags that already exist on leads today are not backfilled.
