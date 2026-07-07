@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "Netlify Functions that log Follow Up Boss 'peopleTagsCreated' webhook events for ZHL status tags, so the Power Real Estate Group dashboard can filter leads by the real date a ZHL tag was added.",
   "dependencies": {
-    "@netlify/blobs": "^8.1.0"
+    "@netlify/blobs": "^8.1.0",
+    "@netlify/functions": "^2.8.2"
   }
 }

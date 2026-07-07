@@ -11,6 +11,9 @@ timestamp anywhere else).
   to a private Netlify Blobs store.
 - `netlify/functions/zhl-events.js` — read-only endpoint the dashboard calls
   (with a bearer token) to pull that log back.
+- `netlify/functions/daily-summary.js` — scheduled function (runs hourly,
+  only sends at 8 AM Pacific) that posts a per-office pipeline summary to a
+  Slack Incoming Webhook, one message per office (Riverside/OC/LA).
 
 Only tags added **after** this webhook is registered with FUB will have a real
 date. Tags that already exist on leads today are not backfilled.
