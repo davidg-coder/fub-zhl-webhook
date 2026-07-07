@@ -7,13 +7,18 @@ instead of the contact's creation date (FUB's API doesn't expose a per-tag
 timestamp anywhere else).
 
 - `netlify/functions/fub-webhook.js` — receives FUB's `peopleTagsCreated`
-  webhook, keeps only the 5 known ZHL tags, and appends `{personId, tag, addedAt}`
-  to a private Netlify Blobs store.
+  webhook, keeps only the 5 known ZHL tags, appends `{personId, tag, addedAt}`
+  to a private Netlify Blobs store, and fires an instant Slack message when
+  the tag is "Pre-approved" or "Funded".
 - `netlify/functions/zhl-events.js` — read-only endpoint the dashboard calls
   (with a bearer token) to pull that log back.
 - `netlify/functions/daily-summary.js` — scheduled function (runs hourly,
   only sends at 8 AM Pacific) that posts a per-office pipeline summary to a
   Slack Incoming Webhook, one message per office (Riverside/OC/LA).
+- `netlify/functions/lead-assigned-webhook.js` — receives FUB's `peopleCreated`
+  webhook, looks up who each new lead is assigned to, and fires a Slack alert
+  the moment an agent is assigned their 5th new lead in the current week
+  (Monday–Sunday, Pacific time).
 
 Only tags added **after** this webhook is registered with FUB will have a real
 date. Tags that already exist on leads today are not backfilled.

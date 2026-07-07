@@ -12,12 +12,44 @@ const ZHL_TAGS = new Set([
   "Zillow zhl Status: Funded",
 ]);
 
+// Tags worth an immediate Slack ping, not just a silent log entry.
+const NOTIFY_ON_TAGS = new Set([
+  "Zillow zhl Status: Pre-approved",
+  "Zillow zhl Status: Funded",
+]);
+
 function isSignatureValid(rawBody, signatureHeader, systemKey) {
   const expected = crypto
     .createHmac("sha256", systemKey)
     .update(Buffer.from(rawBody).toString("base64"))
     .digest("hex");
   return signatureHeader === expected;
+}
+
+async function fetchPersonName(personId) {
+  const res = await fetch(`https://api.followupboss.com/v1/people/${personId}`, {
+    headers: {
+      Authorization: "Basic " + Buffer.from(`${process.env.FUB_API_KEY}:`).toString("base64"),
+    },
+  });
+  if (!res.ok) return `Lead #${personId}`;
+  const p = await res.json();
+  return `${p.firstName || ""} ${p.lastName || ""}`.trim() || `Lead #${personId}`;
+}
+
+async function notifyZhlUpdate(personId, tag) {
+  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+  if (!webhookUrl) return;
+  const name   = await fetchPersonName(personId);
+  const status = tag.replace("Zillow zhl Status: ", "");
+  const emoji  = status === "Funded" ? "💰" : "🟢";
+  const text   = `${emoji} *ZHL update:* ${name} is now *${status}* — ` +
+                 `<https://power.followupboss.com/2/people/view/${personId}|Open in FUB>`;
+  await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  }).catch(() => {});
 }
 
 exports.handler = async (event) => {
@@ -76,6 +108,12 @@ exports.handler = async (event) => {
 
   if (newEntries.length > 0) {
     await store.setJSON("events", [...existing, ...newEntries]);
+  }
+
+  for (const entry of newEntries) {
+    if (NOTIFY_ON_TAGS.has(entry.tag)) {
+      await notifyZhlUpdate(entry.personId, entry.tag);
+    }
   }
 
   return { statusCode: 200, body: "ok" };
