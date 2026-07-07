@@ -78,11 +78,11 @@ exports.handler = async (event) => {
 
     const person = newRank !== null || isRegression ? await fetchPerson(personId) : null;
     const agent = person && person.assignedTo;
+    const name = person
+      ? `${person.firstName || ""} ${person.lastName || ""}`.trim() || `Lead #${personId}`
+      : `Lead #${personId}`;
 
     if (webhookUrl && isRegression) {
-      const name = person
-        ? `${person.firstName || ""} ${person.lastName || ""}`.trim() || `Lead #${personId}`
-        : `Lead #${personId}`;
       const text =
         `⬅️ *Stage regression:* ${name} moved from *${previous.stage}* back to *${newStage}* — ` +
         `<https://power.followupboss.com/2/people/view/${personId}|Open in FUB>`;
@@ -93,7 +93,7 @@ exports.handler = async (event) => {
       }).catch(() => {});
     }
 
-    newChanges.push({ personId, agent, stage: newStage, rank: newRank, at });
+    newChanges.push({ personId, agent, name, stage: newStage, rank: newRank, at });
     current[personId] = { stage: newStage, rank: newRank, at };
   }
 

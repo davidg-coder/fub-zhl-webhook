@@ -18,23 +18,30 @@ function weekKeyFor(date) {
 }
 
 function buildLeaderboardText(events, currentWeekKey) {
-  const counts = {};
+  const byAgent = {};
   for (const e of events) {
     if (!e.agent || !COUNTED_STAGES.has(e.stage)) continue;
     if (weekKeyFor(new Date(e.at)) !== currentWeekKey) continue;
-    counts[e.agent] = (counts[e.agent] || 0) + 1;
+    (byAgent[e.agent] = byAgent[e.agent] || []).push(e);
   }
 
-  const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const ranked = Object.entries(byAgent).sort((a, b) => b[1].length - a[1].length).slice(0, 10);
   if (ranked.length === 0) {
     return "*🏆 Weekly Leaderboard* — no Appointment Set / Under Contract moves logged yet this week.";
   }
 
   const medals = ["🥇", "🥈", "🥉"];
-  const lines = ranked.map(
-    ([agent, count], i) => `${medals[i] || "▪️"} ${agent} — ${count}`
-  );
-  return `*🏆 Weekly Leaderboard* — Appointment Set + Under Contract moves\n${lines.join("\n")}`;
+  const blocks = ranked.map(([agent, leads], i) => {
+    const header = `${medals[i] || "▪️"} ${agent} — ${leads.length}`;
+    const links = leads
+      .map((e) => {
+        const label = e.name || `Lead #${e.personId}`;
+        return `    • <https://power.followupboss.com/2/people/view/${e.personId}|${label}> (${e.stage})`;
+      })
+      .join("\n");
+    return `${header}\n${links}`;
+  });
+  return `*🏆 Weekly Leaderboard* — Appointment Set + Under Contract moves\n${blocks.join("\n")}`;
 }
 
 const handler = async () => {

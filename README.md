@@ -32,7 +32,8 @@ timestamp anywhere else).
   repeating.
 - `netlify/functions/weekly-leaderboard.js` — scheduled function (runs hourly,
   only sends Friday 8 AM Pacific) that ranks agents by how many leads they
-  moved to Appointment Set / Under Contract during the current week, using
+  moved to Appointment Set / Under Contract during the current week, with a
+  FUB link to each lead underneath the agent's count for easy tracking, using
   the log from `stage-webhook.js`.
 
 Only tags added **after** this webhook is registered with FUB will have a real
