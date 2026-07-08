@@ -65,7 +65,7 @@ async function fetchIncompleteTasks(since) {
   return tasks;
 }
 
-const handler = async (event) => {
+const handler = async () => {
   const webhookUrl = process.env.SLACK_WEBHOOK_URL;
   if (!webhookUrl || !process.env.FUB_API_KEY) {
     return { statusCode: 500, body: "SLACK_WEBHOOK_URL or FUB_API_KEY not configured" };
@@ -76,15 +76,6 @@ const handler = async (event) => {
     siteID: process.env.SITE_ID,
     token: process.env.NETLIFY_AUTH_TOKEN,
   });
-
-  if (event && event.queryStringParameters && event.queryStringParameters.reset === "1") {
-    const auth = (event.headers && (event.headers.authorization || event.headers.Authorization)) || "";
-    if (auth !== `Bearer ${process.env.DASHBOARD_TOKEN}`) {
-      return { statusCode: 401, body: "Unauthorized" };
-    }
-    await store.setJSON("ids", []);
-    return { statusCode: 200, body: "ids reset" };
-  }
 
   let since = await store.get("since", { type: "text" });
   if (!since) {
