@@ -56,6 +56,25 @@ exports.handler = async (event) => {
     return { statusCode: 400, body: "Invalid JSON" };
   }
 
+  if (payload.event === "debugResend") {
+    const auth = event.headers.authorization || event.headers.Authorization || "";
+    if (auth !== `Bearer ${process.env.DASHBOARD_TOKEN}`) {
+      return { statusCode: 401, body: "Unauthorized" };
+    }
+    const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+    const { agent, leads } = payload;
+    const links = leads
+      .map((l) => `    • <https://power.followupboss.com/2/people/view/${l.personId}|${l.name}>`)
+      .join("\n");
+    const text = `⚠️ *Workload alert:* ${agent} has been assigned *${leads.length} new leads* this week.\n${links}`;
+    await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    return { statusCode: 200, body: "sent" };
+  }
+
   if (payload.event !== "peopleCreated") {
     return { statusCode: 200, body: "ignored" };
   }
