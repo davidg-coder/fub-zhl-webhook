@@ -29,22 +29,6 @@ function weekKeyFor(date) {
 }
 
 exports.handler = async (event) => {
-  if (event.httpMethod === "GET") {
-    const auth = event.headers.authorization || event.headers.Authorization || "";
-    if (auth !== `Bearer ${process.env.DASHBOARD_TOKEN}`) {
-      return { statusCode: 401, body: "Unauthorized" };
-    }
-    const store = getStore({
-      name: "lead-assignments",
-      siteID: process.env.SITE_ID,
-      token: process.env.NETLIFY_AUTH_TOKEN,
-    });
-    const events = (await store.get("events", { type: "json" })) || [];
-    const agent = event.queryStringParameters && event.queryStringParameters.agent;
-    const filtered = agent ? events.filter((e) => e.agent === agent) : events;
-    return { statusCode: 200, body: JSON.stringify(filtered, null, 2) };
-  }
-
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
@@ -54,25 +38,6 @@ exports.handler = async (event) => {
     payload = JSON.parse(event.body || "{}");
   } catch {
     return { statusCode: 400, body: "Invalid JSON" };
-  }
-
-  if (payload.event === "debugResend") {
-    const auth = event.headers.authorization || event.headers.Authorization || "";
-    if (auth !== `Bearer ${process.env.DASHBOARD_TOKEN}`) {
-      return { statusCode: 401, body: "Unauthorized" };
-    }
-    const webhookUrl = process.env.SLACK_WEBHOOK_URL;
-    const { agent, leads } = payload;
-    const links = leads
-      .map((l) => `    • <https://power.followupboss.com/2/people/view/${l.personId}|${l.name}>`)
-      .join("\n");
-    const text = `⚠️ *Workload alert:* ${agent} has been assigned *${leads.length} new leads* this week.\n${links}`;
-    await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    return { statusCode: 200, body: "sent" };
   }
 
   if (payload.event !== "peopleCreated") {
