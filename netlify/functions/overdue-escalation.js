@@ -5,6 +5,11 @@
 // looks at tasks created after `since` (set once, on first run) — the
 // backlog is permanently excluded, not just skipped on day one. A Netlify
 // Blobs store of already-alerted task IDs keeps it from repeating.
+//
+// FUB's `dueDateBefore` query param is silently ignored by the /tasks API
+// (confirmed live: passing a 2020 cutoff still returns tasks due in 2026), so
+// due-date filtering is done locally against each task's own dueDate/
+// dueDateTime instead of trusting the API to pre-filter.
 const { schedule } = require("@netlify/functions");
 const { getStore } = require("@netlify/blobs");
 
@@ -19,13 +24,35 @@ function iso(d) {
   return d.toISOString().replace(/\.\d+Z$/, "Z");
 }
 
-async function fetchOverdueTasks(cutoff, since) {
+// FUB stores plain tasks as a date-only `dueDate` (no time) in the account's
+// local time. Treat that as end-of-day Pacific; use `dueDateTime` instead
+// when the task has a specific time.
+function pacificOffsetHours(date) {
+  const part = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    timeZoneName: "shortOffset",
+  })
+    .formatToParts(date)
+    .find((p) => p.type === "timeZoneName").value; // e.g. "GMT-7"
+  const match = part.match(/GMT([+-]\d+)/);
+  return match ? parseInt(match[1], 10) : -8;
+}
+
+function dueTimestamp(task) {
+  if (task.dueDateTime) return new Date(task.dueDateTime).getTime();
+  if (!task.dueDate) return null;
+  const offset = pacificOffsetHours(new Date(`${task.dueDate}T12:00:00Z`));
+  const sign = offset >= 0 ? "+" : "-";
+  const offsetStr = `${sign}${String(Math.abs(offset)).padStart(2, "0")}:00`;
+  return new Date(`${task.dueDate}T23:59:59${offsetStr}`).getTime();
+}
+
+async function fetchIncompleteTasks(since) {
   const tasks = [];
   let next = null;
   do {
     const url = new URL(`${FUB_BASE}/tasks`);
     url.searchParams.set("isCompleted", "false");
-    url.searchParams.set("dueDateBefore", iso(cutoff));
     url.searchParams.set("createdAfter", since);
     url.searchParams.set("limit", "100");
     if (next) url.searchParams.set("next", next);
@@ -34,11 +61,11 @@ async function fetchOverdueTasks(cutoff, since) {
     const data = await res.json();
     tasks.push(...(data.tasks || []));
     next = data._metadata && data._metadata.next;
-  } while (next && tasks.length < 1000);
+  } while (next && tasks.length < 5000);
   return tasks;
 }
 
-const handler = async () => {
+const handler = async (event) => {
   const webhookUrl = process.env.SLACK_WEBHOOK_URL;
   if (!webhookUrl || !process.env.FUB_API_KEY) {
     return { statusCode: 500, body: "SLACK_WEBHOOK_URL or FUB_API_KEY not configured" };
@@ -50,6 +77,15 @@ const handler = async () => {
     token: process.env.NETLIFY_AUTH_TOKEN,
   });
 
+  if (event && event.queryStringParameters && event.queryStringParameters.reset === "1") {
+    const auth = (event.headers && (event.headers.authorization || event.headers.Authorization)) || "";
+    if (auth !== `Bearer ${process.env.DASHBOARD_TOKEN}`) {
+      return { statusCode: 401, body: "Unauthorized" };
+    }
+    await store.setJSON("ids", []);
+    return { statusCode: 200, body: "ids reset" };
+  }
+
   let since = await store.get("since", { type: "text" });
   if (!since) {
     since = iso(new Date());
@@ -58,8 +94,12 @@ const handler = async () => {
     return { statusCode: 200, body: `initialized — only watching tasks created after ${since}` };
   }
 
-  const cutoff = new Date(Date.now() - OVERDUE_HOURS * 3600 * 1000);
-  const tasks = await fetchOverdueTasks(cutoff, since);
+  const cutoff = Date.now() - OVERDUE_HOURS * 3600 * 1000;
+  const allTasks = await fetchIncompleteTasks(since);
+  const tasks = allTasks.filter((t) => {
+    const due = dueTimestamp(t);
+    return due !== null && due <= cutoff;
+  });
 
   const alerted = new Set((await store.get("ids", { type: "json" })) || []);
   const newlyOverdue = tasks.filter((t) => !alerted.has(t.id));
@@ -82,7 +122,10 @@ const handler = async () => {
     await store.setJSON("ids", [...alerted]);
   }
 
-  return { statusCode: 200, body: `checked ${tasks.length}, alerted ${newlyOverdue.length}` };
+  return {
+    statusCode: 200,
+    body: `checked ${allTasks.length} incomplete, ${tasks.length} actually overdue, alerted ${newlyOverdue.length}`,
+  };
 };
 
 exports.handler = schedule("0 * * * *", handler);
