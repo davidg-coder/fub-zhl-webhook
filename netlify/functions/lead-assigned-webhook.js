@@ -29,6 +29,22 @@ function weekKeyFor(date) {
 }
 
 exports.handler = async (event) => {
+  if (event.httpMethod === "GET") {
+    const auth = event.headers.authorization || event.headers.Authorization || "";
+    if (auth !== `Bearer ${process.env.DASHBOARD_TOKEN}`) {
+      return { statusCode: 401, body: "Unauthorized" };
+    }
+    const store = getStore({
+      name: "lead-assignments",
+      siteID: process.env.SITE_ID,
+      token: process.env.NETLIFY_AUTH_TOKEN,
+    });
+    const events = (await store.get("events", { type: "json" })) || [];
+    const agent = event.queryStringParameters && event.queryStringParameters.agent;
+    const filtered = agent ? events.filter((e) => e.agent === agent) : events;
+    return { statusCode: 200, body: JSON.stringify(filtered, null, 2) };
+  }
+
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
