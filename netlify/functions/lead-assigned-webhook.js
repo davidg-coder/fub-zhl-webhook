@@ -63,8 +63,9 @@ exports.handler = async (event) => {
     const person = await fetchPerson(personId);
     const agent  = person && person.assignedTo;
     if (!agent) continue;
-    const createdAt = (person && person.created) || new Date().toISOString();
-    newEntries.push({ personId, agent, weekKey: weekKeyFor(new Date(createdAt)), createdAt });
+    const name = `${person.firstName || ""} ${person.lastName || ""}`.trim() || `Lead #${personId}`;
+    const createdAt = person.created || new Date().toISOString();
+    newEntries.push({ personId, agent, name, weekKey: weekKeyFor(new Date(createdAt)), createdAt });
   }
 
   if (newEntries.length === 0) {
@@ -77,11 +78,15 @@ exports.handler = async (event) => {
   const webhookUrl = process.env.SLACK_WEBHOOK_URL;
   if (webhookUrl) {
     for (const entry of newEntries) {
-      const countThisWeek = all.filter(
+      const thisWeek = all.filter(
         (e) => e.agent === entry.agent && e.weekKey === entry.weekKey
-      ).length;
-      if (countThisWeek === WORKLOAD_THRESHOLD) {
-        const text = `⚠️ *Workload alert:* ${entry.agent} has been assigned *${WORKLOAD_THRESHOLD} new leads* this week.`;
+      );
+      if (thisWeek.length === WORKLOAD_THRESHOLD) {
+        const links = thisWeek
+          .map((e) => `    • <https://power.followupboss.com/2/people/view/${e.personId}|${e.name || `Lead #${e.personId}`}>`)
+          .join("\n");
+        const text =
+          `⚠️ *Workload alert:* ${entry.agent} has been assigned *${WORKLOAD_THRESHOLD} new leads* this week.\n${links}`;
         await fetch(webhookUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

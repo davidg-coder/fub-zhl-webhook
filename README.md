@@ -18,7 +18,7 @@ timestamp anywhere else).
 - `netlify/functions/lead-assigned-webhook.js` — receives FUB's `peopleCreated`
   webhook, looks up who each new lead is assigned to, and fires a Slack alert
   the moment an agent is assigned their 5th new lead in the current week
-  (Monday–Sunday, Pacific time).
+  (Monday–Sunday, Pacific time), listing a FUB link to each of the 5 leads.
 - `netlify/functions/stage-webhook.js` — receives FUB's `peopleStageUpdated`
   webhook. Fires an instant Slack alert when a lead moves *backward* in the
   pipeline (e.g. Under Contract → Showing Homes — a strong "this deal is
