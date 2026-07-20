@@ -79,40 +79,69 @@ exports.handler = async (event) => {
   }
 
   const tags = (payload.data && payload.data.tags) || [];
-  const matchedTags = tags.filter((t) => ZHL_TAGS.has(t));
   const personIds = payload.resourceIds || [];
 
-  if (matchedTags.length === 0 || personIds.length === 0) {
-    return { statusCode: 200, body: "no zhl tags" };
+  if (tags.length === 0 || personIds.length === 0) {
+    return { statusCode: 200, body: "no tags" };
   }
 
   const addedAt = payload.eventCreated || new Date().toISOString();
-  const store = getStore({
-    name: "zhl-tag-events",
+
+  // Full account-wide log — every tag added to any person, no allowlist.
+  // Powers the recruiting dashboard's "tags added in last N days" tracker,
+  // which catches hand-raiser re-engagements a `created`-date filter misses.
+  const allTagsStore = getStore({
+    name: "all-tag-events",
     siteID: process.env.SITE_ID,
     token: process.env.NETLIFY_AUTH_TOKEN,
   });
-  const existing = (await store.get("events", { type: "json" })) || [];
-
-  const newEntries = [];
+  const existingAll = (await allTagsStore.get("events", { type: "json" })) || [];
+  const newAllEntries = [];
   for (const personId of personIds) {
-    for (const tag of matchedTags) {
-      const alreadyLogged = existing.some(
+    for (const tag of tags) {
+      const alreadyLogged = existingAll.some(
         (e) => e.personId === personId && e.tag === tag && e.addedAt === addedAt
       );
       if (!alreadyLogged) {
-        newEntries.push({ personId, tag, addedAt });
+        newAllEntries.push({ personId, tag, addedAt });
       }
     }
   }
-
-  if (newEntries.length > 0) {
-    await store.setJSON("events", [...existing, ...newEntries]);
+  if (newAllEntries.length > 0) {
+    await allTagsStore.setJSON("events", [...existingAll, ...newAllEntries]);
   }
 
-  for (const entry of newEntries) {
-    if (NOTIFY_ON_TAGS.has(entry.tag)) {
-      await notifyZhlUpdate(entry.personId, entry.tag);
+  // ZHL-specific log (unchanged) — only the 5 known status tags, kept
+  // separate since zhl-events.js / the sales dashboard already reads this.
+  const matchedTags = tags.filter((t) => ZHL_TAGS.has(t));
+  if (matchedTags.length > 0) {
+    const zhlStore = getStore({
+      name: "zhl-tag-events",
+      siteID: process.env.SITE_ID,
+      token: process.env.NETLIFY_AUTH_TOKEN,
+    });
+    const existingZhl = (await zhlStore.get("events", { type: "json" })) || [];
+
+    const newZhlEntries = [];
+    for (const personId of personIds) {
+      for (const tag of matchedTags) {
+        const alreadyLogged = existingZhl.some(
+          (e) => e.personId === personId && e.tag === tag && e.addedAt === addedAt
+        );
+        if (!alreadyLogged) {
+          newZhlEntries.push({ personId, tag, addedAt });
+        }
+      }
+    }
+
+    if (newZhlEntries.length > 0) {
+      await zhlStore.setJSON("events", [...existingZhl, ...newZhlEntries]);
+    }
+
+    for (const entry of newZhlEntries) {
+      if (NOTIFY_ON_TAGS.has(entry.tag)) {
+        await notifyZhlUpdate(entry.personId, entry.tag);
+      }
     }
   }
 

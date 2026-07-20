@@ -7,11 +7,17 @@ instead of the contact's creation date (FUB's API doesn't expose a per-tag
 timestamp anywhere else).
 
 - `netlify/functions/fub-webhook.js` — receives FUB's `peopleTagsCreated`
-  webhook, keeps only the 5 known ZHL tags, appends `{personId, tag, addedAt}`
-  to a private Netlify Blobs store, and fires an instant Slack message when
-  the tag is "Pre-approved" or "Funded".
-- `netlify/functions/zhl-events.js` — read-only endpoint the dashboard calls
-  (with a bearer token) to pull that log back.
+  webhook. Logs every tag added to any person, account-wide, to a Blobs
+  store (`all-tag-events`) so the recruiting dashboard can spot hand-raiser
+  re-engagements that a `created`-date filter would miss. Separately, if the
+  tag is one of the 5 known ZHL status tags, also appends it to its own
+  store (`zhl-tag-events`) and fires an instant Slack message when the tag
+  is "Pre-approved" or "Funded".
+- `netlify/functions/zhl-events.js` — read-only endpoint the sales dashboard
+  calls (with a bearer token) to pull the ZHL tag log back.
+- `netlify/functions/tag-events.js` — read-only endpoint the recruiting
+  dashboard calls (with the same bearer token) to pull the full account-wide
+  tag log back.
 - `netlify/functions/daily-summary.js` — scheduled function (runs hourly,
   only sends at 8 AM Pacific) that posts a per-office pipeline summary to a
   Slack Incoming Webhook, one message per office (Riverside/OC/LA).
