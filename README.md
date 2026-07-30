@@ -9,8 +9,11 @@ timestamp anywhere else).
 - `netlify/functions/fub-webhook.js` — receives FUB's `peopleTagsCreated`
   webhook. Logs every tag added to any person, account-wide, to a Blobs
   store (`all-tag-events`) so the recruiting dashboard can spot hand-raiser
-  re-engagements that a `created`-date filter would miss. Separately, if the
-  tag is one of the 5 known ZHL status tags, also appends it to its own
+  re-engagements that a `created`-date filter would miss. On every write,
+  prunes events older than 90 days to keep the store from growing forever —
+  except the recruiting/home-value tags the dashboard's hand-raiser tracker
+  is actually built for (`LONG_RETENTION_TAGS`), which get 365 days. Separately,
+  if the tag is one of the 5 known ZHL status tags, also appends it to its own
   store (`zhl-tag-events`) and fires an instant Slack message when the tag
   is "Pre-approved" or "Funded".
 - `netlify/functions/zhl-events.js` — read-only endpoint the sales dashboard

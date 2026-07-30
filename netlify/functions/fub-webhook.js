@@ -12,6 +12,42 @@ const ZHL_TAGS = new Set([
   "Zillow zhl Status: Funded",
 ]);
 
+// Tags the recruiting dashboard's hand-raiser tracker cares about — kept
+// much longer than the account-wide noise (RealScout/Fello/Zillow/etc.).
+// Must be kept in sync with RECRUITING_TAGS/HOMEVALUE_TAGS in
+// fub_recruiting_streamlit.py.
+const LONG_RETENTION_TAGS = new Set([
+  "Courted.io",
+  "Courted.io - Recruiting Auto",
+  "Courted.io - Handraiser",
+  "meta ads (recruiting)",
+  "Join Power",
+  "Join Power | Meta Ads | Reclutamiento 2/24/26",
+  "Form: Join Power",
+  "Reclutamiento 2/24/26",
+  "leadngage_recruitment_sh",
+  "recruiting_facebook_webdrvn",
+  "resubido_agents_recruitment",
+  "this person requested to join Power",
+  "homevalue_website_webdrvn",
+  "homevalue_facebook_webdrvn",
+]);
+
+const DEFAULT_RETENTION_DAYS = 90;
+const LONG_RETENTION_DAYS = 365;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Drops events past their retention window so the Blobs store doesn't grow
+// forever — every webhook call currently reads/rewrites this JSON in full.
+function pruneEvents(events) {
+  const now = Date.now();
+  return events.filter((e) => {
+    const retentionDays = LONG_RETENTION_TAGS.has(e.tag) ? LONG_RETENTION_DAYS : DEFAULT_RETENTION_DAYS;
+    const addedAtMs = new Date(e.addedAt).getTime();
+    return Number.isNaN(addedAtMs) || now - addedAtMs <= retentionDays * DAY_MS;
+  });
+}
+
 // Tags worth an immediate Slack ping, not just a silent log entry.
 const NOTIFY_ON_TAGS = new Set([
   "Zillow zhl Status: Pre-approved",
@@ -95,7 +131,7 @@ exports.handler = async (event) => {
     siteID: process.env.SITE_ID,
     token: process.env.NETLIFY_AUTH_TOKEN,
   });
-  const existingAll = (await allTagsStore.get("events", { type: "json" })) || [];
+  const existingAll = pruneEvents((await allTagsStore.get("events", { type: "json" })) || []);
   const newAllEntries = [];
   for (const personId of personIds) {
     for (const tag of tags) {
