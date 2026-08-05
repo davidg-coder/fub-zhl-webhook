@@ -62,25 +62,29 @@ function isSignatureValid(rawBody, signatureHeader, systemKey) {
   return signatureHeader === expected;
 }
 
-async function fetchPersonName(personId) {
+async function fetchPerson(personId) {
   const res = await fetch(`https://api.followupboss.com/v1/people/${personId}`, {
     headers: {
       Authorization: "Basic " + Buffer.from(`${process.env.FUB_API_KEY}:`).toString("base64"),
     },
   });
-  if (!res.ok) return `Lead #${personId}`;
-  const p = await res.json();
-  return `${p.firstName || ""} ${p.lastName || ""}`.trim() || `Lead #${personId}`;
+  if (!res.ok) return null;
+  return res.json();
 }
 
 async function notifyZhlUpdate(personId, tag) {
   const webhookUrl = process.env.SLACK_WEBHOOK_URL;
   if (!webhookUrl) return;
-  const name   = await fetchPersonName(personId);
+  const person = await fetchPerson(personId);
+  const name   = person
+    ? `${person.firstName || ""} ${person.lastName || ""}`.trim() || `Lead #${personId}`
+    : `Lead #${personId}`;
+  const agent  = person && person.assignedTo;
   const status = tag.replace("Zillow zhl Status: ", "");
   const emoji  = status === "Funded" ? "💰" : "🟢";
-  const text   = `${emoji} *ZHL update:* ${name} is now *${status}* — ` +
-                 `<https://power.followupboss.com/2/people/view/${personId}|Open in FUB>`;
+  const text   = `${emoji} *ZHL update:* ${name} is now *${status}*` +
+                 (agent ? ` (Agent: ${agent})` : "") +
+                 ` — <https://power.followupboss.com/2/people/view/${personId}|Open in FUB>`;
   await fetch(webhookUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
