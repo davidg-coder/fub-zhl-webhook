@@ -44,6 +44,12 @@ timestamp anywhere else).
   moved to Appointment Set / Under Contract during the current week, with a
   FUB link to each lead underneath the agent's count for easy tracking, using
   the log from `stage-webhook.js`.
+- `netlify/functions/vtk-stage-webhook.js` — receives FUB's `peopleStageUpdated`
+  webhook (registered separately from `stage-webhook.js`). Fires a Slack alert
+  to a dedicated channel (`SLACK_WEBHOOK_VTK_URL`) when a lead whose `source`
+  is exactly "VENDE TU KASA" reaches Listing agreement, Under Contract,
+  Showing Homes, or Submitting Offers — so leadership can watch that source
+  without wading through the account-wide feed.
 
 Only tags added **after** this webhook is registered with FUB will have a real
 date. Tags that already exist on leads today are not backfilled.
@@ -68,6 +74,9 @@ date. Tags that already exist on leads today are not backfilled.
    - `FUB_SYSTEM_KEY` — optional. If you have an X-System-Key from Follow Up
      Boss, add it here to enable signature verification on incoming webhooks.
      Safe to skip for now; the function works without it.
+   - `SLACK_WEBHOOK_VTK_URL` — Incoming Webhook URL for the channel where
+     `vtk-stage-webhook.js` should post (separate from `SLACK_WEBHOOK_URL`,
+     which is used by every other function in this repo).
 4. **Trigger a redeploy** so the env vars take effect.
 5. Send me the resulting site URL (`https://<your-site>.netlify.app`) — I'll
    test both endpoints and then register the webhook with FUB via its API.
