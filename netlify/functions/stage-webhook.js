@@ -69,14 +69,16 @@ exports.handler = async (event) => {
   const changes = (await changesStore.get("events", { type: "json" })) || [];
 
   const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+  const metReminderWebhook = process.env.SLACK_WEBHOOK_MET_REMINDER_URL;
   const newChanges = [];
 
   for (const personId of personIds) {
     const previous = current[personId];
     const isRegression =
       previous && previous.rank !== null && newRank !== null && newRank > previous.rank;
+    const isMet = newStage === "Recruiting - Met";
 
-    const person = newRank !== null || isRegression ? await fetchPerson(personId) : null;
+    const person = newRank !== null || isRegression || isMet ? await fetchPerson(personId) : null;
     const agent = person && person.assignedTo;
     const name = person
       ? `${person.firstName || ""} ${person.lastName || ""}`.trim() || `Lead #${personId}`
@@ -87,6 +89,18 @@ exports.handler = async (event) => {
         `⬅️ *Stage regression:* ${name} moved from *${previous.stage}* back to *${newStage}* — ` +
         `<https://power.followupboss.com/2/people/view/${personId}|Open in FUB>`;
       await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      }).catch(() => {});
+    }
+
+    if (metReminderWebhook && isMet) {
+      const text =
+        `🎥 *${name}* moved to *Recruiting - Met* — remember to move their Meet transcript ` +
+        `into the shared Drive folder for the Weekly Report. ` +
+        `<https://power.followupboss.com/2/people/view/${personId}|Open in FUB>`;
+      await fetch(metReminderWebhook, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
