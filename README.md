@@ -47,9 +47,9 @@ timestamp anywhere else).
 - `netlify/functions/vtk-stage-webhook.js` — receives FUB's `peopleStageUpdated`
   webhook (registered separately from `stage-webhook.js`). Fires a Slack alert
   to a dedicated channel (`SLACK_WEBHOOK_VTK_URL`) when a lead whose `source`
-  is exactly "VENDE TU KASA" reaches Listing agreement, Under Contract,
-  Showing Homes, or Submitting Offers — so leadership can watch that source
-  without wading through the account-wide feed.
+  is exactly "VENDE TU KASA" reaches Listing agreement, Active Listing, Under
+  Contract, Showing Homes, or Submitting Offers — so leadership can watch that
+  source without wading through the account-wide feed.
 
 Only tags added **after** this webhook is registered with FUB will have a real
 date. Tags that already exist on leads today are not backfilled.

@@ -4,6 +4,7 @@
 // through stage-webhook.js's account-wide feed.
 const NOTIFY_STAGES = new Set([
   "Listing agreement",
+  "Active Listing",
   "Under Contract",
   "Showing Homes",
   "Submitting Offers",
