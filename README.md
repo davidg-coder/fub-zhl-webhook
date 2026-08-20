@@ -32,7 +32,16 @@ timestamp anywhere else).
   webhook. Fires an instant Slack alert when a lead moves *backward* in the
   pipeline (e.g. Under Contract → Showing Homes — a strong "this deal is
   falling apart" signal), and logs every stage change to a Blobs store that
-  `weekly-leaderboard.js` reads.
+  `weekly-leaderboard.js` reads. Also carries an unrelated second concern:
+  when a lead whose `source` contains "zillow" reaches Submitting Offers,
+  Showing Homes, Listing Agreement, or Under Contract, looks up its office
+  from the "Flex Profile" custom field (`customFlexProfile` — only returned
+  by the FUB API with `fields=allFields`) and posts to that office's Slack
+  channel (`SLACK_WEBHOOK_ZILLOW_LA_URL` / `_OC_URL` / `_RV_URL`). This lives
+  here instead of its own function because FUB caps active webhooks per
+  event at 2, and this event's 2 slots are already taken by this function
+  and `vtk-stage-webhook.js`. Leads with no Flex Profile office match are
+  silently skipped.
 - `netlify/functions/overdue-escalation.js` — scheduled function (runs hourly)
   that pings Slack the first time a task crosses 48 hours overdue. Only
   applies to tasks created after this function's first run — the account's
@@ -50,14 +59,6 @@ timestamp anywhere else).
   is exactly "VENDE TU KASA" reaches Listing agreement, Active Listing, Under
   Contract, Showing Homes, or Submitting Offers — so leadership can watch that
   source without wading through the account-wide feed.
-- `netlify/functions/zillow-stage-webhook.js` — receives FUB's
-  `peopleStageUpdated` webhook (registered separately from the two above).
-  When a lead whose `source` contains "zillow" reaches Submitting Offers,
-  Showing Homes, Listing Agreement, or Under Contract, looks up the lead's
-  office from the "Flex Profile" custom field (`customFlexProfile` — only
-  returned by the FUB API with `fields=allFields`) and posts to that office's
-  Slack channel (`SLACK_WEBHOOK_ZILLOW_LA_URL` / `_OC_URL` / `_RV_URL`). Leads
-  with no Flex Profile office match are silently skipped.
 
 Only tags added **after** this webhook is registered with FUB will have a real
 date. Tags that already exist on leads today are not backfilled.

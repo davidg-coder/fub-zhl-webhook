@@ -3,6 +3,11 @@
 // known stage per person is kept in Blobs to detect when a lead moves
 // backward (a strong "this deal may be falling apart" signal). Every change
 // is also appended to a log that weekly-leaderboard.js reads to rank agents.
+//
+// Also carries an unrelated second concern: office-routed Zillow milestone
+// alerts. FUB caps active webhooks per event at 2 (already used up by this
+// function + vtk-stage-webhook.js), so a 3rd peopleStageUpdated registration
+// isn't possible — that logic lives here instead of its own function.
 const { getStore } = require("@netlify/blobs");
 
 // Most-advanced first — mirrors PIPELINE_STAGES in fub_streamlit.py.
@@ -17,16 +22,53 @@ const STAGE_RANK = {
   "Lead":              7,
 };
 
+// Zillow-lead milestone stages, routed to the lead's office via the "Flex
+// Profile" custom field (customFlexProfile) — only returned by the FUB API
+// when the request explicitly asks for fields=allFields.
+const ZILLOW_NOTIFY_STAGES = new Set([
+  "Submitting Offers",
+  "Showing Homes",
+  "Listing Agreement",
+  "Under Contract",
+]);
+
+const ZILLOW_OFFICE_WEBHOOKS = {
+  "Los Angeles": process.env.SLACK_WEBHOOK_ZILLOW_LA_URL,
+  "Orange County": process.env.SLACK_WEBHOOK_ZILLOW_OC_URL,
+  "Riverside": process.env.SLACK_WEBHOOK_ZILLOW_RV_URL,
+};
+
 function authHeader() {
   return "Basic " + Buffer.from(`${process.env.FUB_API_KEY}:`).toString("base64");
 }
 
 async function fetchPerson(personId) {
-  const res = await fetch(`https://api.followupboss.com/v1/people/${personId}`, {
+  const res = await fetch(`https://api.followupboss.com/v1/people/${personId}?fields=allFields`, {
     headers: { Authorization: authHeader() },
   });
   if (!res.ok) return null;
   return res.json();
+}
+
+async function notifyZillowMilestone(person, personId, newStage) {
+  const source = (person.source || "").toLowerCase();
+  if (!source.includes("zillow")) return;
+
+  const office = String(person.customFlexProfile || "").trim();
+  const webhookUrl = ZILLOW_OFFICE_WEBHOOKS[office];
+  if (!webhookUrl) return; // no Flex Profile match — nowhere to send it
+
+  const name = `${person.firstName || ""} ${person.lastName || ""}`.trim() || `Lead #${personId}`;
+  const agent = person.assignedTo;
+  const text = `🏠 *Claudio AI — Zillow:* ${name} moved to *${newStage}*` +
+               (agent ? ` (Agent: ${agent})` : "") +
+               ` — <https://power.followupboss.com/2/people/view/${personId}|Open in FUB>`;
+
+  await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  }).catch(() => {});
 }
 
 exports.handler = async (event) => {
@@ -77,12 +119,19 @@ exports.handler = async (event) => {
     const isRegression =
       previous && previous.rank !== null && newRank !== null && newRank > previous.rank;
     const isMet = newStage === "Recruiting - Met";
+    const isZillowMilestone = ZILLOW_NOTIFY_STAGES.has(newStage);
 
-    const person = newRank !== null || isRegression || isMet ? await fetchPerson(personId) : null;
+    const person = newRank !== null || isRegression || isMet || isZillowMilestone
+      ? await fetchPerson(personId)
+      : null;
     const agent = person && person.assignedTo;
     const name = person
       ? `${person.firstName || ""} ${person.lastName || ""}`.trim() || `Lead #${personId}`
       : `Lead #${personId}`;
+
+    if (isZillowMilestone && person) {
+      await notifyZillowMilestone(person, personId, newStage);
+    }
 
     if (webhookUrl && isRegression) {
       const text =
