@@ -92,7 +92,7 @@ const handler = async () => {
     const amount = e.additional && e.additional.preApprovalAmount;
     const amountStr = typeof amount === "number" ? `$${amount.toLocaleString()}` : "an unspecified amount";
     const text =
-      `🏠 *Pre-approval:* *${name}* was just pre-approved for ${amountStr}` +
+      `<!channel> 🏠 *Pre-approval:* *${name}* was just pre-approved for ${amountStr}` +
       (agent ? ` (Agent: ${agent})` : "") +
       ` — <https://power.followupboss.com/2/people/view/${e.personId}|Open in FUB>`;
     await fetch(webhookUrl, {

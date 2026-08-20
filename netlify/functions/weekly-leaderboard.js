@@ -27,7 +27,7 @@ function buildLeaderboardText(events, currentWeekKey) {
 
   const ranked = Object.entries(byAgent).sort((a, b) => b[1].length - a[1].length).slice(0, 10);
   if (ranked.length === 0) {
-    return "*🏆 Weekly Leaderboard* — no Appointment Set / Under Contract moves logged yet this week.";
+    return "<!channel> *🏆 Weekly Leaderboard* — no Appointment Set / Under Contract moves logged yet this week.";
   }
 
   const medals = ["🥇", "🥈", "🥉"];
@@ -41,7 +41,7 @@ function buildLeaderboardText(events, currentWeekKey) {
       .join("\n");
     return `${header}\n${links}`;
   });
-  return `*🏆 Weekly Leaderboard* — Appointment Set + Under Contract moves\n${blocks.join("\n")}`;
+  return `<!channel> *🏆 Weekly Leaderboard* — Appointment Set + Under Contract moves\n${blocks.join("\n")}`;
 }
 
 const handler = async () => {

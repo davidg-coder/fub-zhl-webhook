@@ -57,7 +57,7 @@ exports.handler = async (event) => {
 
     const name = `${person.firstName || ""} ${person.lastName || ""}`.trim() || `Lead #${personId}`;
     const agent = person.assignedTo;
-    const text = `🏡 *Vende Tu Kasa:* ${name} moved to *${newStage}*` +
+    const text = `<!channel> 🏡 *Vende Tu Kasa:* ${name} moved to *${newStage}*` +
                  (agent ? ` (Agent: ${agent})` : "") +
                  ` — <https://power.followupboss.com/2/people/view/${personId}|Open in FUB>`;
 

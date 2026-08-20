@@ -86,7 +86,7 @@ exports.handler = async (event) => {
           .map((e) => `    • <https://power.followupboss.com/2/people/view/${e.personId}|${e.name || `Lead #${e.personId}`}>`)
           .join("\n");
         const text =
-          `⚠️ *Workload alert:* ${entry.agent} has been assigned *${WORKLOAD_THRESHOLD} new leads* this week.\n${links}`;
+          `<!channel> ⚠️ *Workload alert:* ${entry.agent} has been assigned *${WORKLOAD_THRESHOLD} new leads* this week.\n${links}`;
         await fetch(webhookUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

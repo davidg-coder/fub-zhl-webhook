@@ -55,7 +55,7 @@ async function buildSummary(officeName, teamId) {
     timeZone: "America/Los_Angeles",
   });
 
-  return `*🏠 Power Real Estate Group — Daily FUB Summary*
+  return `<!channel> *🏠 Power Real Estate Group — Daily FUB Summary*
 *${dateStr}  |  Team: ${officeName}*
 
 📊 *Pipeline Snapshot*

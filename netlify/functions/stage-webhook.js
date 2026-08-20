@@ -60,7 +60,7 @@ async function notifyZillowMilestone(person, personId, newStage) {
 
   const name = `${person.firstName || ""} ${person.lastName || ""}`.trim() || `Lead #${personId}`;
   const agent = person.assignedTo;
-  const text = `🏠 *Claudio AI — Zillow:* ${name} moved to *${newStage}*` +
+  const text = `<!channel> 🏠 *Claudio AI — Zillow:* ${name} moved to *${newStage}*` +
                (agent ? ` (Agent: ${agent})` : "") +
                ` — <https://power.followupboss.com/2/people/view/${personId}|Open in FUB>`;
 
@@ -135,7 +135,7 @@ exports.handler = async (event) => {
 
     if (webhookUrl && isRegression) {
       const text =
-        `⬅️ *Stage regression:* ${name} moved from *${previous.stage}* back to *${newStage}* — ` +
+        `<!channel> ⬅️ *Stage regression:* ${name} moved from *${previous.stage}* back to *${newStage}* — ` +
         `<https://power.followupboss.com/2/people/view/${personId}|Open in FUB>`;
       await fetch(webhookUrl, {
         method: "POST",
@@ -146,7 +146,7 @@ exports.handler = async (event) => {
 
     if (metReminderWebhook && isMet) {
       const text =
-        `🎥 *${name}* moved to *Recruiting - Met* — remember to move their Meet transcript ` +
+        `<!channel> 🎥 *${name}* moved to *Recruiting - Met* — remember to move their Meet transcript ` +
         `into the shared Drive folder for the Weekly Report. ` +
         `<https://power.followupboss.com/2/people/view/${personId}|Open in FUB>`;
       await fetch(metReminderWebhook, {

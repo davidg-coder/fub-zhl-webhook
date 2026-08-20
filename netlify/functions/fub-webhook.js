@@ -82,7 +82,7 @@ async function notifyZhlUpdate(personId, tag) {
   const agent  = person && person.assignedTo;
   const status = tag.replace("Zillow zhl Status: ", "");
   const emoji  = status === "Funded" ? "💰" : "🟢";
-  const text   = `${emoji} *ZHL update:* ${name} is now *${status}*` +
+  const text   = `<!channel> ${emoji} *ZHL update:* ${name} is now *${status}*` +
                  (agent ? ` (Agent: ${agent})` : "") +
                  ` — <https://power.followupboss.com/2/people/view/${personId}|Open in FUB>`;
   await fetch(webhookUrl, {
