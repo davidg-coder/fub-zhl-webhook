@@ -50,6 +50,14 @@ timestamp anywhere else).
   is exactly "VENDE TU KASA" reaches Listing agreement, Active Listing, Under
   Contract, Showing Homes, or Submitting Offers — so leadership can watch that
   source without wading through the account-wide feed.
+- `netlify/functions/zillow-stage-webhook.js` — receives FUB's
+  `peopleStageUpdated` webhook (registered separately from the two above).
+  When a lead whose `source` contains "zillow" reaches Submitting Offers,
+  Showing Homes, Listing Agreement, or Under Contract, looks up the lead's
+  office from the "Flex Profile" custom field (`customFlexProfile` — only
+  returned by the FUB API with `fields=allFields`) and posts to that office's
+  Slack channel (`SLACK_WEBHOOK_ZILLOW_LA_URL` / `_OC_URL` / `_RV_URL`). Leads
+  with no Flex Profile office match are silently skipped.
 
 Only tags added **after** this webhook is registered with FUB will have a real
 date. Tags that already exist on leads today are not backfilled.
@@ -77,6 +85,9 @@ date. Tags that already exist on leads today are not backfilled.
    - `SLACK_WEBHOOK_VTK_URL` — Incoming Webhook URL for the channel where
      `vtk-stage-webhook.js` should post (separate from `SLACK_WEBHOOK_URL`,
      which is used by every other function in this repo).
+   - `SLACK_WEBHOOK_ZILLOW_LA_URL`, `SLACK_WEBHOOK_ZILLOW_OC_URL`,
+     `SLACK_WEBHOOK_ZILLOW_RV_URL` — Incoming Webhook URLs for the LA/OC/
+     Riverside channels `zillow-stage-webhook.js` posts to.
 4. **Trigger a redeploy** so the env vars take effect.
 5. Send me the resulting site URL (`https://<your-site>.netlify.app`) — I'll
    test both endpoints and then register the webhook with FUB via its API.
