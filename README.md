@@ -37,11 +37,13 @@ timestamp anywhere else).
   Showing Homes, Listing Agreement, or Under Contract, looks up its office
   from the "Flex Profile" custom field (`customFlexProfile` — only returned
   by the FUB API with `fields=allFields`) and posts to that office's Slack
-  channel (`SLACK_WEBHOOK_ZILLOW_LA_URL` / `_OC_URL` / `_RV_URL`). This lives
-  here instead of its own function because FUB caps active webhooks per
-  event at 2, and this event's 2 slots are already taken by this function
-  and `vtk-stage-webhook.js`. Leads with no Flex Profile office match are
-  silently skipped.
+  channel (`SLACK_WEBHOOK_ZILLOW_LA_URL` / `_OC_URL` / `_RV_URL`). Also posts
+  to the Riverside channel (`SLACK_WEBHOOK_ZILLOW_RV_URL`, reused) whenever
+  any Riverside-office lead — any source — reaches Appointment Set. Both
+  live here instead of their own function because FUB caps active webhooks
+  per event at 2, and this event's 2 slots are already taken by this
+  function and `vtk-stage-webhook.js`. Leads with no Flex Profile office
+  match are silently skipped.
 - `netlify/functions/overdue-escalation.js` — scheduled function (runs hourly)
   that pings Slack the first time a task crosses 48 hours overdue. Only
   applies to tasks created after this function's first run — the account's
@@ -88,7 +90,8 @@ date. Tags that already exist on leads today are not backfilled.
      which is used by every other function in this repo).
    - `SLACK_WEBHOOK_ZILLOW_LA_URL`, `SLACK_WEBHOOK_ZILLOW_OC_URL`,
      `SLACK_WEBHOOK_ZILLOW_RV_URL` — Incoming Webhook URLs for the LA/OC/
-     Riverside channels `zillow-stage-webhook.js` posts to.
+     Riverside channels `stage-webhook.js` posts to (Zillow milestones, plus
+     Riverside's Appointment Set alert).
 4. **Trigger a redeploy** so the env vars take effect.
 5. Send me the resulting site URL (`https://<your-site>.netlify.app`) — I'll
    test both endpoints and then register the webhook with FUB via its API.
