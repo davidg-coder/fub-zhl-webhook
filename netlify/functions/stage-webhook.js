@@ -13,14 +13,14 @@ const { getStore } = require("@netlify/blobs");
 
 // Most-advanced first — mirrors PIPELINE_STAGES in fub_streamlit.py.
 const STAGE_RANK = {
-  "Under Contract":    0,
-  "Submitting Offers": 1,
-  "Showing Homes":     2,
-  "Appointment Set":   3,
-  "Met With":          4,
-  "Spoke With":        5,
-  "Attempted Contact": 6,
-  "Lead":              7,
+  "Under Contract":      0,
+  "Submitting Offers":   1,
+  "Showing Homes":       2,
+  "Appointment Set":     3,
+  "Met with customer":   4,
+  "Spoke with Customer": 5,
+  "Attempted Contact":   6,
+  "Lead":                7,
 };
 
 // Zillow-lead milestone stages, routed to the lead's office via the "Flex
@@ -50,15 +50,20 @@ const RIVERSIDE_APPOINTMENT_STAGE = "Appointment Set";
 const ATTEMPTED_CONTACT_STAGE = "Attempted Contact";
 const ATTEMPTED_CONTACT_FIELD = "customAttemptedContactEnteredAt";
 
+// Appointment Set daily-digest support (Zillow Lead Audit System component #2):
+// stamped the same way, so the digest routine can compute "days in stage".
+const APPOINTMENT_SET_STAGE = "Appointment Set";
+const APPOINTMENT_SET_FIELD = "customAppointmentSetEnteredAt";
+
 function authHeader() {
   return "Basic " + Buffer.from(`${process.env.FUB_API_KEY}:`).toString("base64");
 }
 
-async function setAttemptedContactTimestamp(personId, value) {
+async function setStageFieldTimestamp(personId, field, value) {
   await fetch(`https://api.followupboss.com/v1/people/${personId}`, {
     method: "PUT",
     headers: { Authorization: authHeader(), "Content-Type": "application/json" },
-    body: JSON.stringify({ [ATTEMPTED_CONTACT_FIELD]: value }),
+    body: JSON.stringify({ [field]: value }),
   }).catch(() => {});
 }
 
@@ -187,11 +192,28 @@ exports.handler = async (event) => {
     if (isEnteringAttemptedContact && person) {
       const source = (person.source || "").toLowerCase();
       if (source.includes("zillow") && !person[ATTEMPTED_CONTACT_FIELD]) {
-        await setAttemptedContactTimestamp(personId, at);
+        await setStageFieldTimestamp(personId, ATTEMPTED_CONTACT_FIELD, at);
         attemptedContactTracked = true;
       }
     } else if (isLeavingAttemptedContact && previous.attemptedContactTracked) {
-      await setAttemptedContactTimestamp(personId, "");
+      await setStageFieldTimestamp(personId, ATTEMPTED_CONTACT_FIELD, "");
+    }
+
+    // Appointment Set daily-digest support: stamp entry (Zillow leads only), clear
+    // on exit — same pattern as Attempted Contact above.
+    let appointmentSetTracked = false;
+    const isEnteringAppointmentSet = newStage === APPOINTMENT_SET_STAGE;
+    const isLeavingAppointmentSet =
+      previous && previous.stage === APPOINTMENT_SET_STAGE && newStage !== APPOINTMENT_SET_STAGE;
+
+    if (isEnteringAppointmentSet && person) {
+      const source = (person.source || "").toLowerCase();
+      if (source.includes("zillow") && !person[APPOINTMENT_SET_FIELD]) {
+        await setStageFieldTimestamp(personId, APPOINTMENT_SET_FIELD, at);
+        appointmentSetTracked = true;
+      }
+    } else if (isLeavingAppointmentSet && previous.appointmentSetTracked) {
+      await setStageFieldTimestamp(personId, APPOINTMENT_SET_FIELD, "");
     }
 
     if (webhookUrl && isRegression) {
@@ -218,7 +240,7 @@ exports.handler = async (event) => {
     }
 
     newChanges.push({ personId, agent, name, stage: newStage, rank: newRank, at });
-    current[personId] = { stage: newStage, rank: newRank, at, attemptedContactTracked };
+    current[personId] = { stage: newStage, rank: newRank, at, attemptedContactTracked, appointmentSetTracked };
   }
 
   await stageStore.setJSON("current", current);
