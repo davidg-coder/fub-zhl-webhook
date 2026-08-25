@@ -43,8 +43,23 @@ const ZILLOW_OFFICE_WEBHOOKS = {
 // Zillow office milestone alerts above (SLACK_WEBHOOK_ZILLOW_RV_URL).
 const RIVERSIDE_APPOINTMENT_STAGE = "Appointment Set";
 
+// Zillow Lead Audit System (attempted-contact pond rule): FUB exposes no
+// "time in current stage" field anywhere in the API, so this webhook is the
+// only place that can stamp it. n8n polls this custom field every 2h and
+// reassigns to an ISA pond once a Zillow lead has sat here >24h.
+const ATTEMPTED_CONTACT_STAGE = "Attempted Contact";
+const ATTEMPTED_CONTACT_FIELD = "customAttemptedContactEnteredAt";
+
 function authHeader() {
   return "Basic " + Buffer.from(`${process.env.FUB_API_KEY}:`).toString("base64");
+}
+
+async function setAttemptedContactTimestamp(personId, value) {
+  await fetch(`https://api.followupboss.com/v1/people/${personId}`, {
+    method: "PUT",
+    headers: { Authorization: authHeader(), "Content-Type": "application/json" },
+    body: JSON.stringify({ [ATTEMPTED_CONTACT_FIELD]: value }),
+  }).catch(() => {});
 }
 
 async function fetchPerson(personId) {
@@ -163,6 +178,22 @@ exports.handler = async (event) => {
       await notifyRiversideAppointmentSet(person, personId);
     }
 
+    // Attempted-contact pond rule: stamp entry (Zillow leads only), clear on exit.
+    let attemptedContactTracked = false;
+    const isEnteringAttemptedContact = newStage === ATTEMPTED_CONTACT_STAGE;
+    const isLeavingAttemptedContact =
+      previous && previous.stage === ATTEMPTED_CONTACT_STAGE && newStage !== ATTEMPTED_CONTACT_STAGE;
+
+    if (isEnteringAttemptedContact && person) {
+      const source = (person.source || "").toLowerCase();
+      if (source.includes("zillow") && !person[ATTEMPTED_CONTACT_FIELD]) {
+        await setAttemptedContactTimestamp(personId, at);
+        attemptedContactTracked = true;
+      }
+    } else if (isLeavingAttemptedContact && previous.attemptedContactTracked) {
+      await setAttemptedContactTimestamp(personId, "");
+    }
+
     if (webhookUrl && isRegression) {
       const text =
         `<!channel> ⬅️ *Stage regression:* ${name} moved from *${previous.stage}* back to *${newStage}* — ` +
@@ -187,7 +218,7 @@ exports.handler = async (event) => {
     }
 
     newChanges.push({ personId, agent, name, stage: newStage, rank: newRank, at });
-    current[personId] = { stage: newStage, rank: newRank, at };
+    current[personId] = { stage: newStage, rank: newRank, at, attemptedContactTracked };
   }
 
   await stageStore.setJSON("current", current);
