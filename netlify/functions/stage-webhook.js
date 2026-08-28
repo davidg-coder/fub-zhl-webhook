@@ -55,6 +55,21 @@ const ATTEMPTED_CONTACT_FIELD = "customAttemptedContactEnteredAt";
 const APPOINTMENT_SET_STAGE = "Appointment Set";
 const APPOINTMENT_SET_FIELD = "customAppointmentSetEnteredAt";
 
+// Recruiting "Moved By" column (Power Portal Pipeline Explorer): FUB's webhook
+// carries no actor field at all (confirmed against their docs — only
+// eventId/eventCreated/event/resourceIds/data.stage, no userId/changedBy), so
+// the closest available proxy is "who was assigned to the lead when it hit
+// this stage" via `agent` below. Matched loosely because FUB's stage strings
+// have inconsistent spelling/spacing, e.g. "Recruting- Fully Onboarded" —
+// mirrors stageKey() in src/lib/recruiting/constants.ts. DO NOT simplify.
+function stageKey(value) {
+  return String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .replace(/^recru[a-z]*?ing/, "");
+}
+const MOVED_BY_TRACKED_KEYS = new Set(["set", "met", "applied", "systemssetup", "fullyonboarded"]);
+
 function authHeader() {
   return "Basic " + Buffer.from(`${process.env.FUB_API_KEY}:`).toString("base64");
 }
@@ -166,8 +181,9 @@ exports.handler = async (event) => {
     const isMet = newStage === "Recruiting - Met";
     const isZillowMilestone = ZILLOW_NOTIFY_STAGES.has(newStage);
     const isRiversideAppointment = newStage === RIVERSIDE_APPOINTMENT_STAGE;
+    const isTrackedForMovedBy = MOVED_BY_TRACKED_KEYS.has(stageKey(newStage));
 
-    const person = newRank !== null || isRegression || isMet || isZillowMilestone
+    const person = newRank !== null || isRegression || isMet || isZillowMilestone || isTrackedForMovedBy
       ? await fetchPerson(personId)
       : null;
     const agent = person && person.assignedTo;

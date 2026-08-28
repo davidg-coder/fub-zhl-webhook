@@ -32,7 +32,12 @@ timestamp anywhere else).
   webhook. Fires an instant Slack alert when a lead moves *backward* in the
   pipeline (e.g. Under Contract → Showing Homes — a strong "this deal is
   falling apart" signal), and logs every stage change to a Blobs store that
-  `weekly-leaderboard.js` reads. Also carries an unrelated second concern:
+  `weekly-leaderboard.js` reads. For the recruiting stages Set/Met/Applied/
+  Systems Set Up/Fully Onboarded, the logged event also includes `agent` (the
+  lead's assigned recruiter at that moment) so the Power Portal's Pipeline
+  Explorer can show a "Moved By" column — FUB's webhook carries no field for
+  who actually performed the change, so the assigned recruiter is the closest
+  available proxy. Also carries an unrelated second concern:
   when a lead whose `source` contains "zillow" reaches Submitting Offers,
   Showing Homes, Listing Agreement, or Under Contract, looks up its office
   from the "Flex Profile" custom field (`customFlexProfile` — only returned
