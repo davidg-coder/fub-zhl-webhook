@@ -49,7 +49,19 @@ exports.handler = async (event) => {
     token: process.env.NETLIFY_AUTH_TOKEN,
   });
   const events = (await store.get("events", { type: "json" })) || [];
-  const filtered = events.filter((e) => CURATED_TAGS.has(e.tag));
+  let filtered = events.filter((e) => CURATED_TAGS.has(e.tag));
+
+  // Optional ?days=N window, so memory-constrained callers (n8n) can pull a
+  // recent slice instead of the full ~2,800-event history. Omit for full history.
+  const daysParam = event.queryStringParameters && event.queryStringParameters.days;
+  const days = daysParam ? parseInt(daysParam, 10) : null;
+  if (days && !isNaN(days) && days > 0) {
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    filtered = filtered.filter((e) => {
+      const t = new Date(e.addedAt).getTime();
+      return !isNaN(t) && t >= cutoff;
+    });
+  }
 
   return {
     statusCode: 200,
