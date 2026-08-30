@@ -12,7 +12,9 @@ timestamp anywhere else).
   re-engagements that a `created`-date filter would miss. On every write,
   prunes events older than 90 days to keep the store from growing forever —
   except the recruiting/home-value tags the dashboard's hand-raiser tracker
-  is actually built for (`LONG_RETENTION_TAGS`), which get 365 days. Separately,
+  is actually built for (`LONG_RETENTION_TAGS`), and the VTK (Vende Tu Kasa)
+  campaign tags the VTK Dashboard's tag-tracking section reads
+  (`VTK_CAMPAIGN_TAGS`), both of which get 365 days. Separately,
   if the tag is one of the 5 known ZHL status tags, also appends it to its own
   store (`zhl-tag-events`) and fires an instant Slack message when the tag
   is "Pre-approved" or "Funded".
@@ -21,6 +23,10 @@ timestamp anywhere else).
 - `netlify/functions/tag-events.js` — read-only endpoint the recruiting
   dashboard calls (with the same bearer token) to pull the full account-wide
   tag log back.
+- `netlify/functions/vtk-tag-events.js` — same idea as `tag-events.js`, but
+  filtered to the VTK campaign tags (`CURATED_TAGS`) for the VTK Dashboard's
+  tag-tracking section, so it can track VENDE TU KASA leads by campaign-tag
+  date alongside FUB's `created` date.
 - `netlify/functions/daily-summary.js` — scheduled function (runs hourly,
   only sends at 8 AM Pacific) that posts a per-office pipeline summary to a
   Slack Incoming Webhook, one message per office (Riverside/OC/LA).

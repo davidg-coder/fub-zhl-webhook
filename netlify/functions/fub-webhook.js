@@ -33,6 +33,35 @@ const LONG_RETENTION_TAGS = new Set([
   "homevalue_facebook_webdrvn",
 ]);
 
+// VTK (Vende Tu Kasa) campaign/source tags the VTK Dashboard's tag-tracking
+// section reads via vtk-tag-events.js — kept long-retention like the
+// recruiting tags above since that dashboard tracks by tag date over time,
+// not just recent re-engagements. Must be kept in sync with CURATED_TAGS in
+// vtk-tag-events.js.
+const VTK_CAMPAIGN_TAGS = new Set([
+  "Vende Tu Kasa",
+  "VendeTuKasa",
+  "leadngage_vendetukasa",
+  "#VTKSellernocontact",
+  "VTK Seller - No Contact",
+  "VTK - Sellers 1.5% - 2026",
+  "vendetukasa (zapier-phi)",
+  "VTK Cash Offers KM Follow-up",
+  "San Diego - VTK",
+  "K version - Cash Offers CA - Español - Octubre 2025",
+  "VTK - Sellers 1.5% - 2026 - San Diego",
+  "Vtk_Seller_No_Contact",
+  "K version - Cash Offers CA - Español - Octubre 2025 - San Diego",
+  "1. Page Name: Vende Tu Kasa",
+  "resubido - san diego vtk",
+  "1. Form Name: VTK - Sellers 1.5% - 2026 - San Diego",
+  "Vende Tu Kasa (website)",
+  "VTK (cash offer)",
+  "VTK Appointment (New System)",
+  "VTK_appt_Group D",
+  "CASH_OFFER_DIEGO",
+]);
+
 const DEFAULT_RETENTION_DAYS = 90;
 const LONG_RETENTION_DAYS = 365;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -42,7 +71,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 function pruneEvents(events) {
   const now = Date.now();
   return events.filter((e) => {
-    const retentionDays = LONG_RETENTION_TAGS.has(e.tag) ? LONG_RETENTION_DAYS : DEFAULT_RETENTION_DAYS;
+    const isLongRetention = LONG_RETENTION_TAGS.has(e.tag) || VTK_CAMPAIGN_TAGS.has(e.tag);
+    const retentionDays = isLongRetention ? LONG_RETENTION_DAYS : DEFAULT_RETENTION_DAYS;
     const addedAtMs = new Date(e.addedAt).getTime();
     return Number.isNaN(addedAtMs) || now - addedAtMs <= retentionDays * DAY_MS;
   });
