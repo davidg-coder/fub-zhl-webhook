@@ -4,11 +4,12 @@
 // backward (a strong "this deal may be falling apart" signal). Every change
 // is also appended to a log that weekly-leaderboard.js reads to rank agents.
 //
-// Also carries two unrelated concerns that would otherwise need their own
-// webhook: office-routed Zillow milestone alerts, and a Riverside-only
-// Appointment Set alert (any source). FUB caps active webhooks per event at
+// Also carries three unrelated concerns that would otherwise need their own
+// webhook: office-routed Zillow milestone alerts, a Riverside-only
+// Appointment Set alert (any source), and firing the Recruiting Scorecard
+// Notifier (n8n) on "Recruiting - Set". FUB caps active webhooks per event at
 // 2 (already used up by this function + vtk-stage-webhook.js), so a 3rd
-// peopleStageUpdated registration isn't possible — both live here instead.
+// peopleStageUpdated registration isn't possible — all three live here instead.
 const { getStore } = require("@netlify/blobs");
 
 // Most-advanced first — mirrors PIPELINE_STAGES in fub_streamlit.py.
@@ -42,6 +43,15 @@ const ZILLOW_OFFICE_WEBHOOKS = {
 // Riverside-only, any source — reuses the same Riverside channel as the
 // Zillow office milestone alerts above (SLACK_WEBHOOK_ZILLOW_RV_URL).
 const RIVERSIDE_APPOINTMENT_STAGE = "Appointment Set";
+
+// Recruiting Scorecard Notifier (n8n): was fed by a Zapier zap watching FUB for
+// this exact stage change, which silently failed to fire for at least 2 leads
+// (confirmed missing executions despite a genuine, valid stage change) — this
+// native webhook is already proven reliable for every other stage-driven
+// action in this file, so it triggers the notifier directly instead of Zapier.
+const RECRUITING_SCORECARD_STAGE = "Recruiting - Set";
+const RECRUITING_SCORECARD_WEBHOOK_URL =
+  "https://n8n-production-0ef6.up.railway.app/webhook/recruiting-scorecard";
 
 // Zillow Lead Audit System (attempted-contact pond rule): FUB exposes no
 // "time in current stage" field anywhere in the API, so this webhook is the
@@ -108,6 +118,19 @@ async function notifyZillowMilestone(person, personId, newStage) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
+  }).catch(() => {});
+}
+
+async function notifyRecruitingScorecard(person, personId, newStage) {
+  await fetch(RECRUITING_SCORECARD_WEBHOOK_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      personId: String(personId),
+      stage: newStage,
+      firstName: person.firstName || "",
+      lastName: person.lastName || "",
+    }),
   }).catch(() => {});
 }
 
@@ -182,8 +205,9 @@ exports.handler = async (event) => {
     const isZillowMilestone = ZILLOW_NOTIFY_STAGES.has(newStage);
     const isRiversideAppointment = newStage === RIVERSIDE_APPOINTMENT_STAGE;
     const isTrackedForMovedBy = MOVED_BY_TRACKED_KEYS.has(stageKey(newStage));
+    const isRecruitingScorecard = newStage === RECRUITING_SCORECARD_STAGE;
 
-    const person = newRank !== null || isRegression || isMet || isZillowMilestone || isTrackedForMovedBy
+    const person = newRank !== null || isRegression || isMet || isZillowMilestone || isTrackedForMovedBy || isRecruitingScorecard
       ? await fetchPerson(personId)
       : null;
     const agent = person && person.assignedTo;
@@ -197,6 +221,10 @@ exports.handler = async (event) => {
 
     if (isRiversideAppointment && person) {
       await notifyRiversideAppointmentSet(person, personId);
+    }
+
+    if (isRecruitingScorecard && person) {
+      await notifyRecruitingScorecard(person, personId, newStage);
     }
 
     // Attempted-contact pond rule: stamp entry (Zillow leads only), clear on exit.
