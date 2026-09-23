@@ -34,6 +34,21 @@ timestamp anywhere else).
   webhook, looks up who each new lead is assigned to, and fires a Slack alert
   the moment an agent is assigned their 5th new lead in the current week
   (Monday–Sunday, Pacific time), listing a FUB link to each of the 5 leads.
+  Also routes every new lead to a pipeline-manager Slack channel — Sellers
+  (`SLACK_WEBHOOK_PIPELINE_SELLERS_URL`), Recruiting
+  (`SLACK_WEBHOOK_PIPELINE_RECRUITING_URL`), or Buyers
+  (`SLACK_WEBHOOK_PIPELINE_BUYERS_URL`, the catch-all) — plus a firehose
+  channel (`SLACK_WEBHOOK_PIPELINE_FIREHOSE_URL`) that gets every new lead
+  regardless of pipeline. Classified mainly by tag (`SELLER_TAGS` /
+  `RECRUITING_TAGS`), with `RECRUITING_SOURCES` as a fallback for Recruiting
+  leads that haven't been tagged yet; a lead can match both Sellers and
+  Recruiting and gets posted to both. Leads sourced "Personal client" or
+  "Personal" (manually-created/imported, not real pipeline traffic) are
+  excluded from all 3 pipeline channels but still hit the firehose channel.
+  Lives here instead of its own function
+  to reuse this function's existing `peopleCreated` webhook registration —
+  registering a second one needs an account-owner API key, which the shared
+  key this project uses doesn't have.
 - `netlify/functions/stage-webhook.js` — receives FUB's `peopleStageUpdated`
   webhook. Fires an instant Slack alert when a lead moves *backward* in the
   pipeline (e.g. Under Contract → Showing Homes — a strong "this deal is
@@ -103,6 +118,10 @@ date. Tags that already exist on leads today are not backfilled.
      `SLACK_WEBHOOK_ZILLOW_RV_URL` — Incoming Webhook URLs for the LA/OC/
      Riverside channels `stage-webhook.js` posts to (Zillow milestones, plus
      Riverside's Appointment Set alert).
+   - `SLACK_WEBHOOK_PIPELINE_SELLERS_URL`, `SLACK_WEBHOOK_PIPELINE_RECRUITING_URL`,
+     `SLACK_WEBHOOK_PIPELINE_BUYERS_URL`, `SLACK_WEBHOOK_PIPELINE_FIREHOSE_URL` —
+     Incoming Webhook URLs for the 4 new-lead pipeline channels
+     `lead-assigned-webhook.js` routes to.
 4. **Trigger a redeploy** so the env vars take effect.
 5. Send me the resulting site URL (`https://<your-site>.netlify.app`) — I'll
    test both endpoints and then register the webhook with FUB via its API.
