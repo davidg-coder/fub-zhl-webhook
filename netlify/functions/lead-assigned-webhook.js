@@ -105,11 +105,12 @@ async function routeNewLead(person) {
   const pipelines = EXCLUDED_SOURCES.has(person.source) ? [] : classifyPipelines(person);
   const name = `${person.firstName || ""} ${person.lastName || ""}`.trim() || `Lead #${person.id}`;
   const agent = person.assignedTo;
-  const agentSuffix = agent ? ` (Agent: ${agent})` : "";
+  const source = person.source || "(no source)";
+  const detailsSuffix = agent ? ` (Agent: ${agent} · Source: ${source})` : ` (Source: ${source})`;
   const link = `<https://power.followupboss.com/2/people/view/${person.id}|Open in FUB>`;
 
   for (const pipeline of pipelines) {
-    const text = `<!channel> 🆕 *Claudio AI — ${PIPELINE_LABELS[pipeline]}:* New lead — ${name}${agentSuffix} — ${link}`;
+    const text = `<!channel> 🆕 *Claudio AI — ${PIPELINE_LABELS[pipeline]}:* New lead — ${name}${detailsSuffix} — ${link}`;
     await postSlack(PIPELINE_WEBHOOKS[pipeline], text);
   }
 
@@ -117,7 +118,7 @@ async function routeNewLead(person) {
     ? pipelines.map((p) => PIPELINE_LABELS[p]).join(", ")
     : "none (excluded source)";
   const firehoseText =
-    `<!channel> 🆕 *Claudio AI — Firehose:* New lead — ${name}${agentSuffix}` +
+    `<!channel> 🆕 *Claudio AI — Firehose:* New lead — ${name}${detailsSuffix}` +
     ` → routed to *${routedTo}* — ${link}`;
   await postSlack(FIREHOSE_WEBHOOK_URL, firehoseText);
 }
