@@ -78,7 +78,7 @@ function stageKey(value) {
     .replace(/[^a-z0-9]/g, "")
     .replace(/^recru[a-z]*?ing/, "");
 }
-const MOVED_BY_TRACKED_KEYS = new Set(["set", "met", "applied", "systemssetup", "fullyonboarded"]);
+const MOVED_BY_TRACKED_KEYS = new Set(["set", "met", "applied", "systemssetup", "fullyonboarded", "realonly"]);
 
 function authHeader() {
   return "Basic " + Buffer.from(`${process.env.FUB_API_KEY}:`).toString("base64");
