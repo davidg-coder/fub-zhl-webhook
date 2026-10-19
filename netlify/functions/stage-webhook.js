@@ -80,6 +80,47 @@ function stageKey(value) {
 }
 const MOVED_BY_TRACKED_KEYS = new Set(["set", "met", "applied", "systemssetup", "fullyonboarded", "realonly"]);
 
+// Recruiter credit (Power Portal "Recruiter Credit"): whoever runs the Met
+// (discovery call or in-person office consultation) gets credit, stored in the
+// FUB "Recruited By" field. Only these people run Mets — Shanayah sets them,
+// David is only invited for transcript access. When a recruit applies, FUB
+// often creates a brand-new person record, so on the later stages we copy the
+// credit over from their older (duplicate) recruiting record.
+const RECRUITED_BY_FIELD = "customRecruitedBy";
+const MET_TAKERS = new Set(["Zurielle Herndon", "Ruben Aguila", "Jeffery Mcgonigle", "Diego Clavel", "Jose Samano"]);
+const CREDIT_CARRY_KEYS = new Set(["applied", "systemssetup", "fullyonboarded", "realonly"]);
+
+async function findDuplicateIds(person) {
+  const ids = new Set();
+  const queries = [
+    ...(person.emails || []).map((e) => `email=${encodeURIComponent(e.value)}`),
+    ...(person.phones || []).map((p) => `phone=${encodeURIComponent(p.normalized || p.value)}`),
+  ];
+  for (const q of queries) {
+    const res = await fetch(`https://api.followupboss.com/v1/people?${q}&fields=id`, {
+      headers: { Authorization: authHeader() },
+    }).catch(() => null);
+    if (!res || !res.ok) continue;
+    for (const p of (await res.json()).people || []) {
+      if (p.id !== person.id) ids.add(p.id);
+    }
+  }
+  return [...ids];
+}
+
+// Returns the recruiter to credit for a recruit reaching Applied+ with an empty
+// "Recruited By": the value already on a duplicate record, else the assignee
+// logged when that duplicate was moved to Met.
+async function inheritedRecruiter(person, changes) {
+  for (const id of await findDuplicateIds(person)) {
+    const dup = await fetchPerson(id);
+    if (dup && dup[RECRUITED_BY_FIELD]) return dup[RECRUITED_BY_FIELD];
+    const met = changes.filter((c) => c.personId === id && stageKey(c.stage) === "met" && MET_TAKERS.has(c.agent));
+    if (met.length) return met[met.length - 1].agent;
+  }
+  return null;
+}
+
 function authHeader() {
   return "Basic " + Buffer.from(`${process.env.FUB_API_KEY}:`).toString("base64");
 }
@@ -225,6 +266,19 @@ exports.handler = async (event) => {
 
     if (isRecruitingScorecard && person) {
       await notifyRecruitingScorecard(person, personId, newStage);
+    }
+
+    // Recruiter credit: never overwrites a value someone already set.
+    if (person && !person[RECRUITED_BY_FIELD]) {
+      try {
+        const key = stageKey(newStage);
+        const recruiter = key === "met" && MET_TAKERS.has(agent)
+          ? agent
+          : CREDIT_CARRY_KEYS.has(key) ? await inheritedRecruiter(person, changes) : null;
+        if (recruiter) await setStageFieldTimestamp(personId, RECRUITED_BY_FIELD, recruiter);
+      } catch (err) {
+        console.error("recruiter credit failed", personId, err);
+      }
     }
 
     // Attempted-contact pond rule: stamp entry (Zillow leads only), clear on exit.
