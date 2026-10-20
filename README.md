@@ -125,3 +125,22 @@ date. Tags that already exist on leads today are not backfilled.
 4. **Trigger a redeploy** so the env vars take effect.
 5. Send me the resulting site URL (`https://<your-site>.netlify.app`) — I'll
    test both endpoints and then register the webhook with FUB via its API.
+
+## Claudio — voice assistant inside FUB
+
+Chrome extension (`claudio-extension/`) that adds a 🎙️ button to every
+app.followupboss.com page. Agents talk; Claude answers out loud using FUB's
+official MCP server (`https://mcp.zillow.com/api/fub-public`) with **the
+agent's own FUB login**, so it only sees what that agent can see.
+
+| Function | Purpose |
+|---|---|
+| `claudio-oauth-start` | Starts per-agent FUB sign-in (OAuth + PKCE, public client `189cd617-…`) |
+| `claudio-oauth-callback` | Exchanges the code, stores tokens in Blobs (`claudio-sessions`) |
+| `claudio-oauth-poll` | Extension polls here to receive its session id |
+| `claudio-ask` | Calls Claude (`CLAUDIO_MODEL`, default `claude-opus-5-5`) with the FUB MCP connector |
+
+Env vars: `ANTHROPIC_API_KEY` (required), `CLAUDIO_MODEL`, `CLAUDIO_EFFORT` (default `low`).
+
+Install for a pilot: `chrome://extensions` → Developer mode → **Load unpacked** →
+pick the `claudio-extension` folder → open FUB → 🎙️ → *Connect*.

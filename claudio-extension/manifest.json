@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Claudio for Follow Up Boss",
+  "short_name": "Claudio",
+  "version": "0.1.0",
+  "description": "Voice assistant inside Follow Up Boss for Power Real Estate Group agents. Ask for call lists, lead info, notes and more by talking.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://fub-zhl-webhook.netlify.app/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://*.followupboss.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
