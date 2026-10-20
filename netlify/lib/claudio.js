@@ -81,6 +81,70 @@ async function accessTokenFor(sessionId) {
   return refreshed.accessToken;
 }
 
+// Minimal MCP JSON-RPC call against FUB's server. Responses may come back as
+// plain JSON or as a one-shot SSE stream, so both are handled.
+async function mcpRpc(token, mcpSessionId, method, params, id) {
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+  };
+  if (mcpSessionId) headers["Mcp-Session-Id"] = mcpSessionId;
+  const res = await fetch(MCP_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(id === undefined ? { jsonrpc: "2.0", method, params } : { jsonrpc: "2.0", id, method, params }),
+  });
+  if (!res.ok) throw new Error(`FUB MCP ${method} ${res.status}`);
+  const text = await res.text();
+  let message = null;
+  if (text.trim().startsWith("{")) {
+    message = JSON.parse(text);
+  } else {
+    for (const line of text.split("\n")) {
+      if (!line.startsWith("data:")) continue;
+      const parsed = JSON.parse(line.slice(5));
+      if (parsed.id === id) message = parsed;
+    }
+  }
+  return { message, mcpSessionId: res.headers.get("mcp-session-id") || mcpSessionId };
+}
+
+// Who the agent is in FUB ({id, name, email, role}). Looked up once through
+// the MCP get-current-user tool and cached on the session, so Claude gets the
+// agent's FUB name up front (query_people's assignedTo filter matches names,
+// not emails). Returns null if the lookup fails; Claude can still ask.
+async function currentUserFor(sessionId, token) {
+  const sessions = sessionStore();
+  const session = await sessions.get(sessionId, { type: "json" });
+  if (session && session.user) return session.user;
+  try {
+    const init = await mcpRpc(token, null, "initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "claudio", version: "0.1.0" },
+    }, 1);
+    const sid = init.mcpSessionId;
+    await mcpRpc(token, sid, "notifications/initialized", {});
+    const list = await mcpRpc(token, sid, "tools/list", {}, 2);
+    const tool = (list.message?.result?.tools || []).find((t) => /get-current-user$/.test(t.name));
+    if (!tool) throw new Error("get-current-user tool not found");
+    const call = await mcpRpc(token, sid, "tools/call", { name: tool.name, arguments: {} }, 3);
+    const result = call.message?.result || {};
+    const data =
+      result.structuredContent ||
+      JSON.parse((result.content || []).find((c) => c.type === "text")?.text || "{}");
+    const u = data.session?.user || data.user;
+    if (!u || !u.name) throw new Error("no user in get-current-user result");
+    const user = { id: u.id, name: u.name, email: u.email, role: u.role };
+    if (session) await sessions.setJSON(sessionId, { ...session, user });
+    return user;
+  } catch (err) {
+    console.error("Claudio current-user lookup failed:", err.message);
+    return null;
+  }
+}
+
 function json(statusCode, body) {
   return {
     statusCode,
@@ -102,5 +166,6 @@ module.exports = {
   pkcePair,
   tokenRequest,
   accessTokenFor,
+  currentUserFor,
   json,
 };

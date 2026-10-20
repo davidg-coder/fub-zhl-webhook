@@ -3,7 +3,7 @@
 // Boss through FUB's official MCP server using the *agent's own* OAuth token,
 // so every lookup and write runs with that agent's FUB permissions.
 const Anthropic = require("@anthropic-ai/sdk");
-const { MCP_URL, convoStore, accessTokenFor, json } = require("../lib/claudio");
+const { MCP_URL, convoStore, accessTokenFor, currentUserFor, json } = require("../lib/claudio");
 
 const MODEL = process.env.CLAUDIO_MODEL || "claude-opus-5-5";
 const MAX_PAUSE_CONTINUATIONS = 4;
@@ -13,7 +13,7 @@ const CONVERSATION_IDLE_MS = 30 * 60 * 1000;
 
 const SYSTEM_PROMPT = `You are Claudio, a voice assistant built into Follow Up Boss (FUB) for Power Real Estate Group agents.
 
-You reach FUB only through the Follow Up Boss tools. The person talking to you is the signed-in FUB user. "My leads" means people assigned to them. If you need their name or user id, call get-current-user once.
+You reach FUB only through the Follow Up Boss tools. The person talking to you is the signed-in FUB user, given with each request. "My leads" means people assigned to them: pass their FUB name exactly as given to query_people's assignedTo. assignedTo matches names only, never an email. If the signed-in user is not given, call get-current-user once and use the name it returns.
 
 How you answer:
 - Your answer is read aloud. "speech" must be 1-3 short sentences, natural spoken language, no markdown, no URLs, no IDs.
@@ -59,8 +59,9 @@ const OUTPUT_SCHEMA = {
   },
 };
 
-function describePage(page = {}) {
+function describePage(page = {}, user) {
   const lines = [`Today: ${new Date().toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "long", year: "numeric", month: "long", day: "numeric" })}`];
+  if (user) lines.push(`Signed-in FUB user: ${user.name} (user id ${user.id}, role ${user.role})`);
   if (page.personId) {
     lines.push(`Current FUB page: person profile, person id ${page.personId}${page.personName ? ` (${page.personName})` : ""}`);
   } else if (page.path) {
@@ -105,12 +106,14 @@ exports.handler = async (event) => {
     throw err;
   }
 
+  const user = await currentUserFor(session, fubToken);
+
   const convos = convoStore();
   const convoKey = `${session}/${conversationId}`;
   const saved = await convos.get(convoKey, { type: "json" });
   const messages =
     saved && Date.now() - saved.updatedAt < CONVERSATION_IDLE_MS ? saved.messages : [];
-  messages.push({ role: "user", content: `${describePage(page)}\n\nAgent said: ${text.slice(0, 2000)}` });
+  messages.push({ role: "user", content: `${describePage(page, user)}\n\nAgent said: ${text.slice(0, 2000)}` });
 
   const client = new Anthropic();
   const request = {
