@@ -159,6 +159,8 @@
       .tools { display: flex; gap: 6px; }
 
       .body { padding: 16px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth; }
+      /* Children of a scrolling flex column must not shrink, or the list gets squeezed to fit instead of scrolling. */
+      .body > * { flex-shrink: 0; }
       .body::-webkit-scrollbar { width: 6px; } .body::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 
       .msg { display: flex; gap: 8px; align-items: flex-end; animation: rise .25s ease; }
