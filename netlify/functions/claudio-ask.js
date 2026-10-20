@@ -2,29 +2,42 @@
 // spoken answer (plus an optional call list) out. Claude reaches Follow Up
 // Boss through FUB's official MCP server using the *agent's own* OAuth token,
 // so every lookup and write runs with that agent's FUB permissions.
+//
+// We run the tool loop ourselves rather than using the API's MCP connector:
+// FUB returns most tool data in structuredContent, which the connector drops
+// (Claude only saw one-line summaries like "Read /users ... bounded request").
 const Anthropic = require("@anthropic-ai/sdk");
-const { MCP_URL, convoStore, accessTokenFor, currentUserFor, json } = require("../lib/claudio");
+const { convoStore, accessTokenFor, openMcp, currentUserFor, json } = require("../lib/claudio");
 
 const MODEL = process.env.CLAUDIO_MODEL || "claude-opus-5-5";
-const MAX_PAUSE_CONTINUATIONS = 4;
+const MAX_TOOL_ROUNDS = 8;
 // Older turns still in a conversation after this long are dropped so a
 // forgotten panel doesn't drag a huge history into the next question.
 const CONVERSATION_IDLE_MS = 30 * 60 * 1000;
+// Tool results from earlier turns are cut to this size before saving, so a
+// long conversation doesn't resend every big FUB payload on each question.
+const SAVED_RESULT_CHARS = 1500;
+// UI widgets (Claudio draws its own) and real sends (drafts only) are hidden.
+const HIDDEN_TOOLS = /render_|send_message|call_contact/;
+const TOOLS_CACHE_MS = 10 * 60 * 1000;
 
 const SYSTEM_PROMPT = `You are Claudio, a voice assistant built into Follow Up Boss (FUB) for Power Real Estate Group agents.
 
-You reach FUB only through the Follow Up Boss tools. The person talking to you is the signed-in FUB user, given with each request. "My leads" means people assigned to them: pass their FUB name exactly as given to query_people's assignedTo. assignedTo matches names only, never an email. If the signed-in user is not given, call get-current-user once and use the name it returns.
+You reach FUB only through the Follow Up Boss tools. The person talking to you is the signed-in FUB user, given with each request. "My leads" means people assigned to them: pass their FUB name exactly as given to query_people's assignedTo. assignedTo matches names only, never an email. When a tool takes a user id (assignedUserId, agentId), use the signed-in user's id for "me".
 
 How you answer:
 - Your answer is read aloud. "speech" must be 1-3 short sentences, natural spoken language, no markdown, no URLs, no IDs.
 - Reply in the language the agent spoke (English or Spanish).
-- "display" is a short written version for the panel (plain text, can use line breaks). When "items" is not empty, keep "display" to 1-2 sentences (total count, who to start with) and do not list the names; the panel already shows them.
+- "display" is a short written version for the panel (plain text, can use line breaks). When "items" is not empty, keep "display" to 1-2 sentences (total count, who to start with) and do not list the names; the panel already shows them. For team numbers (counts per agent), put them in "display" as short lines, highest first.
 - Put people the agent should act on (call lists, search results, the lead you just updated) in "items", up to 25. Use real FUB person ids and phone numbers from tool results; never invent them. query_people results include a "phones" list for each person: use the primary one (or the first) as "phone". Use null only when the person truly has no phone. "detail" is a few words, e.g. stage and last activity.
+- Be quick: use the fewest tool calls that answer the question, and small page sizes unless the question needs everything.
 
 Call lists ("make me a smart list", "who should I call"):
 - Use query_people with the filters they asked for (stage, tags, source, assigned to me), sorted so the stalest contact comes first. Put the people in "items" and say how many there are in total.
-- You cannot create real FUB Smart Lists. Call it a "call list" and never say you created a smart list.
-- Do not call any render_* tools; the extension draws its own list.
+- You cannot create real FUB Smart Lists. Call it a "call list" and never say you created a smart list. You can read the agent's existing Smart Lists.
+
+Team questions (admins and team leads):
+- For "agents", list users with role Agent (get_users, limit 100, page with offset if needed), then pass their ids and names to the team tool.
 
 Writes (notes, stage changes, tasks, new contacts, appointments, pausing an action plan):
 - First call the tool WITHOUT confirmed=true to get the proposal. Read the change back in "speech" and set "needs_confirmation" to true.
@@ -59,6 +72,22 @@ const OUTPUT_SCHEMA = {
   },
 };
 
+// FUB's tool list is the same for every agent, so a warm function reuses it.
+let toolsCache = null;
+
+async function fubTools(mcp) {
+  if (toolsCache && Date.now() - toolsCache.at < TOOLS_CACHE_MS) return toolsCache;
+  const raw = await mcp.listTools();
+  const visible = raw.filter((t) => !HIDDEN_TOOLS.test(t.name)).sort((a, b) => a.name.localeCompare(b.name));
+  const defs = visible.map((t) => {
+    const { $schema, ...schema } = t.inputSchema || { type: "object", properties: {} };
+    return { name: t.name, description: (t.description || "").slice(0, 2000), input_schema: schema };
+  });
+  const currentUserTool = raw.find((t) => /get-current-user$/.test(t.name))?.name;
+  toolsCache = { at: Date.now(), defs, names: new Set(defs.map((d) => d.name)), currentUserTool };
+  return toolsCache;
+}
+
 function describePage(page = {}, user) {
   const lines = [`Today: ${new Date().toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "long", year: "numeric", month: "long", day: "numeric" })}`];
   if (user) lines.push(`Signed-in FUB user: ${user.name} (user id ${user.id}, role ${user.role})`);
@@ -84,23 +113,19 @@ function parseAnswer(response) {
   }
 }
 
-// Tool calls and (truncated) results from the latest user turn, for logs.
-function toolTrace(messages) {
-  const lastUser = messages.map((m) => m.role).lastIndexOf("user");
-  const steps = [];
-  for (const m of messages.slice(lastUser + 1)) {
-    if (!Array.isArray(m.content)) continue;
-    for (const b of m.content) {
-      if (b.type === "mcp_tool_use") steps.push({ call: b.name, input: b.input });
-      if (b.type === "mcp_tool_result") {
-        const text = (Array.isArray(b.content) ? b.content : [])
-          .map((c) => (c.type === "text" ? c.text : `[${c.type}]`))
-          .join("");
-        steps.push({ result: b.is_error ? "ERROR" : "ok", chars: text.length, preview: text.slice(0, 400) });
-      }
-    }
-  }
-  return steps;
+// Shrinks tool results from finished turns before the conversation is saved.
+function trimForStorage(messages) {
+  return messages.map((m) => {
+    if (m.role !== "user" || !Array.isArray(m.content)) return m;
+    return {
+      ...m,
+      content: m.content.map((b) =>
+        b.type === "tool_result" && typeof b.content === "string" && b.content.length > SAVED_RESULT_CHARS
+          ? { ...b, content: `${b.content.slice(0, SAVED_RESULT_CHARS)} …[older result trimmed]` }
+          : b
+      ),
+    };
+  });
 }
 
 exports.handler = async (event) => {
@@ -125,7 +150,16 @@ exports.handler = async (event) => {
     throw err;
   }
 
-  const user = await currentUserFor(session, fubToken);
+  let mcp, tools;
+  try {
+    mcp = await openMcp(fubToken);
+    tools = await fubTools(mcp);
+  } catch (err) {
+    console.error("Claudio FUB MCP connect failed:", err.message);
+    if (/\b401\b|\b403\b/.test(err.message)) return json(401, { error: "reconnect" });
+    return json(502, { error: "fub_mcp", speech: "I couldn't reach Follow Up Boss just now. Please try again." });
+  }
+  const user = tools.currentUserTool ? await currentUserFor(session, mcp, tools.currentUserTool) : null;
 
   const convos = convoStore();
   const convoKey = `${session}/${conversationId}`;
@@ -138,25 +172,49 @@ exports.handler = async (event) => {
   const request = {
     model: MODEL,
     max_tokens: 8000,
-    betas: ["mcp-client-2025-11-20", "server-side-fallback-2026-07-01"],
+    betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
     output_config: {
       effort: process.env.CLAUDIO_EFFORT || "low",
       format: { type: "json_schema", schema: OUTPUT_SCHEMA },
     },
+    tools: tools.defs,
+    // Caches the tool definitions + system prompt (tools render before system).
     system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
-    mcp_servers: [{ type: "url", url: MCP_URL, name: "fub", authorization_token: fubToken }],
-    tools: [{ type: "mcp_toolset", mcp_server_name: "fub" }],
-    messages,
   };
 
+  const trace = [];
   let response;
   try {
-    response = await client.beta.messages.create(request);
-    // Long tool loops can pause server-side; hand the partial turn back to continue.
-    for (let i = 0; response.stop_reason === "pause_turn" && i < MAX_PAUSE_CONTINUATIONS; i++) {
+    for (let round = 0; ; round++) {
+      const lastRound = round >= MAX_TOOL_ROUNDS;
+      response = await client.beta.messages.create({
+        ...request,
+        ...(lastRound ? { tool_choice: { type: "none" } } : {}),
+        messages,
+      });
       messages.push({ role: "assistant", content: response.content });
-      response = await client.beta.messages.create({ ...request, messages });
+      if (response.stop_reason !== "tool_use" || lastRound) break;
+
+      const calls = response.content.filter((b) => b.type === "tool_use");
+      const results = await Promise.all(
+        calls.map(async (call) => {
+          trace.push({ call: call.name, input: call.input });
+          let out;
+          if (!tools.names.has(call.name)) {
+            out = { text: `Tool ${call.name} is not available in Claudio.`, isError: true };
+          } else {
+            try {
+              out = await mcp.callTool(call.name, call.input);
+            } catch (err) {
+              out = { text: `Tool call failed: ${err.message}`, isError: true };
+            }
+          }
+          trace.push({ result: out.isError ? "ERROR" : "ok", chars: out.text.length, preview: out.text.slice(0, 300) });
+          return { type: "tool_result", tool_use_id: call.id, content: out.text, ...(out.isError ? { is_error: true } : {}) };
+        })
+      );
+      messages.push({ role: "user", content: results });
     }
   } catch (err) {
     if (err instanceof Anthropic.RateLimitError) {
@@ -164,9 +222,7 @@ exports.handler = async (event) => {
     }
     if (err instanceof Anthropic.APIError) {
       console.error("Claudio Claude API error:", err.status, err.message);
-      // The FUB MCP server rejecting the agent's token surfaces as a 400 here.
-      if (/authoriz|401|unauthor/i.test(err.message)) return json(401, { error: "reconnect" });
-      return json(502, { error: "claude_api", speech: "I couldn't reach Follow Up Boss just now. Please try again." });
+      return json(502, { error: "claude_api", speech: "Something went wrong on my side. Please try again." });
     }
     throw err;
   }
@@ -181,15 +237,12 @@ exports.handler = async (event) => {
     }
   }
 
-  messages.push({ role: "assistant", content: response.content });
-  await convos.setJSON(convoKey, { messages, updatedAt: Date.now() });
+  await convos.setJSON(convoKey, { messages: trimForStorage(messages), updatedAt: Date.now() });
 
-  const trace = toolTrace(messages);
   for (const step of trace) console.log("Claudio tool", JSON.stringify(step));
   if (body.debug) answer.debug = trace;
-
   console.log(
-    `Claudio ok model=${response.model} stop=${response.stop_reason} in=${response.usage?.input_tokens} out=${response.usage?.output_tokens} items=${answer.items.length}`
+    `Claudio ok model=${response.model} stop=${response.stop_reason} tools=${trace.length / 2} in=${response.usage?.input_tokens} cache_read=${response.usage?.cache_read_input_tokens} out=${response.usage?.output_tokens} items=${answer.items.length}`
   );
   return json(200, answer);
 };

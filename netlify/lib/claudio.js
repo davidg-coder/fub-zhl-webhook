@@ -110,31 +110,85 @@ async function mcpRpc(token, mcpSessionId, method, params, id) {
   return { message, mcpSessionId: res.headers.get("mcp-session-id") || mcpSessionId };
 }
 
+// Fields FUB returns that only cost tokens and never help a spoken answer.
+const NOISE_KEYS = new Set([
+  "picture", "mlsMemberships", "leadEmailAddress", "fuid", "acceptedShowingtimeConsent",
+  "acceptedShowingtimeConsentV2", "lastSeenIos", "lastSeenAndroid", "canExport",
+  "canCreateApiKeys", "beta", "nextLink", "_links",
+]);
+
+function compact(value) {
+  if (Array.isArray(value)) return value.map(compact);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (NOISE_KEYS.has(k) || v === null || v === "" || (Array.isArray(v) && v.length === 0)) continue;
+      out[k] = compact(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+const MAX_RESULT_CHARS = 40000;
+
+// A small MCP client for FUB's server. We call the tools ourselves (instead
+// of the API's MCP connector) because FUB puts most tool data in
+// structuredContent, which the connector doesn't pass on to Claude.
+async function openMcp(token) {
+  let nextId = 1;
+  const init = await mcpRpc(token, null, "initialize", {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "claudio", version: "0.2.0" },
+  }, nextId++);
+  const sid = init.mcpSessionId;
+  await mcpRpc(token, sid, "notifications/initialized", {});
+
+  return {
+    async listTools() {
+      const tools = [];
+      let cursor;
+      do {
+        const res = await mcpRpc(token, sid, "tools/list", cursor ? { cursor } : {}, nextId++);
+        const r = res.message?.result || {};
+        tools.push(...(r.tools || []));
+        cursor = r.nextCursor;
+      } while (cursor);
+      return tools;
+    },
+    // Returns { text, isError, data }: text is what Claude sees.
+    async callTool(name, args) {
+      const res = await mcpRpc(token, sid, "tools/call", { name, arguments: args || {} }, nextId++);
+      if (res.message?.error) return { text: `Error: ${res.message.error.message}`, isError: true, data: null };
+      const r = res.message?.result || {};
+      const summary = (r.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
+      let data = r.structuredContent || null;
+      if (!data) {
+        try {
+          data = JSON.parse(summary);
+        } catch {}
+      }
+      let text = data ? JSON.stringify(compact(data)) : summary;
+      if (text.length > MAX_RESULT_CHARS) {
+        text = `${text.slice(0, MAX_RESULT_CHARS)} …[truncated; narrow the request or page with the cursor]`;
+      }
+      return { text: text || "(empty result)", isError: Boolean(r.isError), data };
+    },
+  };
+}
+
 // Who the agent is in FUB ({id, name, email, role}). Looked up once through
-// the MCP get-current-user tool and cached on the session, so Claude gets the
+// the get-current-user tool and cached on the session, so Claude gets the
 // agent's FUB name up front (query_people's assignedTo filter matches names,
 // not emails). Returns null if the lookup fails; Claude can still ask.
-async function currentUserFor(sessionId, token) {
+async function currentUserFor(sessionId, mcp, toolName) {
   const sessions = sessionStore();
   const session = await sessions.get(sessionId, { type: "json" });
   if (session && session.user) return session.user;
   try {
-    const init = await mcpRpc(token, null, "initialize", {
-      protocolVersion: "2025-06-18",
-      capabilities: {},
-      clientInfo: { name: "claudio", version: "0.1.0" },
-    }, 1);
-    const sid = init.mcpSessionId;
-    await mcpRpc(token, sid, "notifications/initialized", {});
-    const list = await mcpRpc(token, sid, "tools/list", {}, 2);
-    const tool = (list.message?.result?.tools || []).find((t) => /get-current-user$/.test(t.name));
-    if (!tool) throw new Error("get-current-user tool not found");
-    const call = await mcpRpc(token, sid, "tools/call", { name: tool.name, arguments: {} }, 3);
-    const result = call.message?.result || {};
-    const data =
-      result.structuredContent ||
-      JSON.parse((result.content || []).find((c) => c.type === "text")?.text || "{}");
-    const u = data.session?.user || data.user;
+    const { data } = await mcp.callTool(toolName, {});
+    const u = data && (data.session?.user || data.user);
     if (!u || !u.name) throw new Error("no user in get-current-user result");
     const user = { id: u.id, name: u.name, email: u.email, role: u.role };
     if (session) await sessions.setJSON(sessionId, { ...session, user });
@@ -166,6 +220,7 @@ module.exports = {
   pkcePair,
   tokenRequest,
   accessTokenFor,
+  openMcp,
   currentUserFor,
   json,
 };
