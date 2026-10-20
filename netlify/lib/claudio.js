@@ -27,6 +27,8 @@ function store(name) {
 const pendingStore = () => store("claudio-oauth-pending");
 const sessionStore = () => store("claudio-sessions");
 const convoStore = () => store("claudio-conversations");
+// Finished answers from claudio-ask-background, picked up by claudio-result.
+const jobStore = () => store("claudio-jobs");
 
 function randomId(bytes = 32) {
   return crypto.randomBytes(bytes).toString("hex");
@@ -216,6 +218,7 @@ module.exports = {
   pendingStore,
   sessionStore,
   convoStore,
+  jobStore,
   randomId,
   pkcePair,
   tokenRequest,

@@ -132,16 +132,11 @@ function trimForStorage(messages) {
   });
 }
 
-exports.handler = async (event) => {
-  if (event.httpMethod !== "POST") return json(405, { error: "Method Not Allowed" });
+// Answers one request; returns a Netlify-style response. Shared by this
+// synchronous endpoint and claudio-ask-background (long questions outlive the
+// ~10s sync function limit, so the extension uses the background one).
+async function runAsk(body) {
   if (!process.env.ANTHROPIC_API_KEY) return json(500, { error: "ANTHROPIC_API_KEY is not set on Netlify" });
-
-  let body;
-  try {
-    body = JSON.parse(event.body || "{}");
-  } catch {
-    return json(400, { error: "invalid JSON" });
-  }
   const { session, conversationId, text, page } = body;
   if (!text || typeof text !== "string") return json(400, { error: "text is required" });
   if (!/^[a-f0-9]{32}$/.test(conversationId || "")) return json(400, { error: "invalid conversationId" });
@@ -259,4 +254,17 @@ exports.handler = async (event) => {
     `Claudio ok model=${response.model} stop=${response.stop_reason} tools=${trace.length / 2} in=${response.usage?.input_tokens} cache_read=${response.usage?.cache_read_input_tokens} out=${response.usage?.output_tokens} items=${answer.items.length}`
   );
   return json(200, answer);
+}
+
+exports.runAsk = runAsk;
+
+exports.handler = async (event) => {
+  if (event.httpMethod !== "POST") return json(405, { error: "Method Not Allowed" });
+  let body;
+  try {
+    body = JSON.parse(event.body || "{}");
+  } catch {
+    return json(400, { error: "invalid JSON" });
+  }
+  return runAsk(body);
 };
