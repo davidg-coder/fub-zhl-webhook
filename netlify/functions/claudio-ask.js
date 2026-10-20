@@ -80,8 +80,12 @@ async function fubTools(mcp) {
   const raw = await mcp.listTools();
   const visible = raw.filter((t) => !HIDDEN_TOOLS.test(t.name)).sort((a, b) => a.name.localeCompare(b.name));
   const defs = visible.map((t) => {
-    const { $schema, ...schema } = t.inputSchema || { type: "object", properties: {} };
-    return { name: t.name, description: (t.description || "").slice(0, 2000), input_schema: schema };
+    const { $schema, ...schema } = t.inputSchema || {};
+    return {
+      name: t.name,
+      description: (t.description || "").slice(0, 2000),
+      input_schema: { ...schema, type: "object", properties: schema.properties || {} },
+    };
   });
   const currentUserTool = raw.find((t) => /get-current-user$/.test(t.name))?.name;
   toolsCache = { at: Date.now(), defs, names: new Set(defs.map((d) => d.name)), currentUserTool };
@@ -164,8 +168,13 @@ exports.handler = async (event) => {
   const convos = convoStore();
   const convoKey = `${session}/${conversationId}`;
   const saved = await convos.get(convoKey, { type: "json" });
-  const messages =
-    saved && Date.now() - saved.updatedAt < CONVERSATION_IDLE_MS ? saved.messages : [];
+  // History saved by the old MCP-connector version has mcp_* blocks the API
+  // now rejects, so it is dropped.
+  const usable =
+    saved &&
+    Date.now() - saved.updatedAt < CONVERSATION_IDLE_MS &&
+    !JSON.stringify(saved.messages).includes('"type":"mcp_');
+  const messages = usable ? saved.messages : [];
   messages.push({ role: "user", content: `${describePage(page, user)}\n\nAgent said: ${text.slice(0, 2000)}` });
 
   const client = new Anthropic();
@@ -222,7 +231,12 @@ exports.handler = async (event) => {
     }
     if (err instanceof Anthropic.APIError) {
       console.error("Claudio Claude API error:", err.status, err.message);
-      return json(502, { error: "claude_api", speech: "Something went wrong on my side. Please try again." });
+      // Pilot only: show the API's reason in the panel so failures can be diagnosed.
+      return json(502, {
+        error: "claude_api",
+        speech: "Something went wrong on my side. Please try again.",
+        display: `Something went wrong on my side (${err.status}): ${String(err.message).slice(0, 400)}`,
+      });
     }
     throw err;
   }

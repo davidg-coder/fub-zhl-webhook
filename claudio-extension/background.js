@@ -57,7 +57,7 @@ async function ask({ text, conversationId, page }) {
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    return { error: true, speech: data.speech || "Something went wrong on my side. Please try again." };
+    return { error: true, speech: data.speech || "Something went wrong on my side. Please try again.", display: data.display };
   }
   return data;
 }
