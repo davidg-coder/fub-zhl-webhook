@@ -84,6 +84,25 @@ function parseAnswer(response) {
   }
 }
 
+// Tool calls and (truncated) results from the latest user turn, for logs.
+function toolTrace(messages) {
+  const lastUser = messages.map((m) => m.role).lastIndexOf("user");
+  const steps = [];
+  for (const m of messages.slice(lastUser + 1)) {
+    if (!Array.isArray(m.content)) continue;
+    for (const b of m.content) {
+      if (b.type === "mcp_tool_use") steps.push({ call: b.name, input: b.input });
+      if (b.type === "mcp_tool_result") {
+        const text = (Array.isArray(b.content) ? b.content : [])
+          .map((c) => (c.type === "text" ? c.text : `[${c.type}]`))
+          .join("");
+        steps.push({ result: b.is_error ? "ERROR" : "ok", chars: text.length, preview: text.slice(0, 400) });
+      }
+    }
+  }
+  return steps;
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") return json(405, { error: "Method Not Allowed" });
   if (!process.env.ANTHROPIC_API_KEY) return json(500, { error: "ANTHROPIC_API_KEY is not set on Netlify" });
@@ -164,6 +183,10 @@ exports.handler = async (event) => {
 
   messages.push({ role: "assistant", content: response.content });
   await convos.setJSON(convoKey, { messages, updatedAt: Date.now() });
+
+  const trace = toolTrace(messages);
+  for (const step of trace) console.log("Claudio tool", JSON.stringify(step));
+  if (body.debug) answer.debug = trace;
 
   console.log(
     `Claudio ok model=${response.model} stop=${response.stop_reason} in=${response.usage?.input_tokens} out=${response.usage?.output_tokens} items=${answer.items.length}`
