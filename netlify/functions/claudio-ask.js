@@ -42,8 +42,8 @@ Team questions (admins and team leads):
 - For "agents", list users with role Agent (get_users, limit 100, page with offset if needed), then pass their ids and names to the team tool.
 
 Writes (notes, stage changes, tasks, new contacts, appointments, pausing an action plan):
-- First call the tool WITHOUT confirmed=true to get the proposal. Read the change back in "speech" and set "needs_confirmation" to true.
-- Only after the agent clearly says yes in the next turn, call it again with confirmed=true. If they say no, drop it.
+- First call the tool WITHOUT confirmed=true to get the proposal. Proposals may include a confirmation code or token (in the result, _meta or resources) plus the tool that commits it; keep them for the next turn. Read the change back in "speech" and set "needs_confirmation" to true.
+- Only after the agent clearly says yes in the next turn, commit it: call the commit tool with that code, or call the tool again with confirmed=true if that is how it works. If they say no, drop it.
 - Texts and emails are drafts only: draft them and tell the agent to send from FUB.
 
 The current FUB page is given with each request. "This lead", "him", "her" means the person on that page when there is one.
@@ -120,9 +120,15 @@ function parseAnswer(response) {
 }
 
 // Shrinks tool results from finished turns before the conversation is saved.
+// The latest turn is kept whole: a write proposal's confirmation code must
+// survive until the agent says yes on the next turn.
 function trimForStorage(messages) {
-  return messages.map((m) => {
-    if (m.role !== "user" || !Array.isArray(m.content)) return m;
+  let latestQuestion = -1;
+  messages.forEach((m, i) => {
+    if (m.role === "user" && typeof m.content === "string") latestQuestion = i;
+  });
+  return messages.map((m, i) => {
+    if (i > latestQuestion || m.role !== "user" || !Array.isArray(m.content)) return m;
     return {
       ...m,
       content: m.content.map((b) =>

@@ -171,6 +171,14 @@ async function openMcp(token) {
           data = JSON.parse(summary);
         } catch {}
       }
+      // Write proposals carry the confirmation code their FUB widget would
+      // submit in _meta or an embedded resource. Claudio has no widget, so
+      // Claude needs them to confirm the write itself.
+      const extras = {};
+      if (r._meta && Object.keys(r._meta).length) extras._meta = r._meta;
+      const resources = (r.content || []).filter((c) => c.type === "resource" && c.resource?.text);
+      if (resources.length) extras.resources = resources.map((c) => c.resource.text.slice(0, 4000));
+      if (Object.keys(extras).length) data = { ...(data || { summary }), ...extras };
       let text = data ? JSON.stringify(compact(data)) : summary;
       if (text.length > MAX_RESULT_CHARS) {
         text = `${text.slice(0, MAX_RESULT_CHARS)} …[truncated; narrow the request or page with the cursor]`;

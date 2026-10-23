@@ -637,10 +637,11 @@
   });
 
   input.addEventListener("input", () => bar.classList.toggle("typing", Boolean(input.value.trim())));
-  input.addEventListener("keydown", (e) => {
-    e.stopPropagation(); // keep FUB's own keyboard shortcuts from firing
-    if (e.key === "Enter") submitTyped();
-  });
+  // keyguard.js swallows key events from the panel before FUB sees them, so
+  // they never reach this input's listeners; it hands Enter over here.
+  window.__claudioOnEnter = () => {
+    if (root.activeElement === input) submitTyped();
+  };
 
   window.addEventListener("keydown", (e) => {
     if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === "c" || e.key === "C")) {
