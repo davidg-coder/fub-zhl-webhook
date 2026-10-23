@@ -84,7 +84,10 @@ async function moveLeadToPond(input, user) {
     }),
   });
   console.log(`Claudio skill move_lead_to_pond person=${personId} by user=${user.id}`);
-  return { text: JSON.stringify({ done: true, person: { id: personId, name }, pond: "Agent Move to Pond" }), isError: false };
+  return {
+    text: JSON.stringify({ done: true, person: { id: personId, name }, pond: "Agent Move to Pond", tagAdded: MOVE_TAG, noteLogged: true }),
+    isError: false,
+  };
 }
 
 async function runSkill(name, input, user) {
