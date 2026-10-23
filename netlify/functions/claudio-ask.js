@@ -8,6 +8,7 @@
 // (Claude only saw one-line summaries like "Read /users ... bounded request").
 const Anthropic = require("@anthropic-ai/sdk");
 const { convoStore, accessTokenFor, openMcp, currentUserFor, json } = require("../lib/claudio");
+const { SKILL_DEFS, SKILL_NAMES, runSkill } = require("../lib/claudio-skills");
 
 const MODEL = process.env.CLAUDIO_MODEL || "claude-opus-5-5";
 const MAX_TOOL_ROUNDS = 8;
@@ -45,6 +46,7 @@ Writes (notes, stage changes, tasks, new contacts, appointments, pausing an acti
 - First call the tool WITHOUT confirmed=true to get the proposal. Proposals may include a confirmation code or token (in the result, _meta or resources) plus the tool that commits it; keep them for the next turn. Read the change back in "speech" and set "needs_confirmation" to true.
 - Only after the agent clearly says yes in the next turn, commit it: call the commit tool with that code, or call the tool again with confirmed=true if that is how it works. If they say no, drop it.
 - Texts and emails are drafts only: draft them and tell the agent to send from FUB.
+- Moving a lead to the pond ("move/throw this lead to the pond", "remove this lead", "#movetopond"): always use move_lead_to_pond, never a tag change. It follows the same preview-then-confirmed=true flow.
 
 The current FUB page is given with each request. "This lead", "him", "her" means the person on that page when there is one.
 If a tool fails or returns nothing, say so plainly. Never guess data.`;
@@ -190,7 +192,7 @@ async function runAsk(body) {
       effort: process.env.CLAUDIO_EFFORT || "low",
       format: { type: "json_schema", schema: OUTPUT_SCHEMA },
     },
-    tools: tools.defs,
+    tools: [...tools.defs, ...SKILL_DEFS],
     // Caches the tool definitions + system prompt (tools render before system).
     system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
   };
@@ -213,7 +215,13 @@ async function runAsk(body) {
         calls.map(async (call) => {
           trace.push({ call: call.name, input: call.input });
           let out;
-          if (!tools.names.has(call.name)) {
+          if (SKILL_NAMES.has(call.name)) {
+            try {
+              out = await runSkill(call.name, call.input, user);
+            } catch (err) {
+              out = { text: `Skill failed: ${err.message}`, isError: true };
+            }
+          } else if (!tools.names.has(call.name)) {
             out = { text: `Tool ${call.name} is not available in Claudio.`, isError: true };
           } else {
             try {
