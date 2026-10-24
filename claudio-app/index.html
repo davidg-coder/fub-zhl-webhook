@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Claudio</title>
+<!-- Claudio as a Follow Up Boss embedded app. FUB loads this page in the
+     person sidebar with ?context=…&signature=…; claudio-app-api checks the
+     signature on every call. The sandboxed iframe can't use the microphone,
+     so voice opens this same page in a popup window (?mode=window). -->
+<script type="text/javascript" src="https://eia.followupboss.com/embeddedApps-v1.0.1.js"></script>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; font-family: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { margin: 0; background: #f6f8fc; color: #0f172a; font-size: 14px; }
+  svg { width: 18px; height: 18px; display: block; }
+  .app { display: flex; flex-direction: column; }
+  .window .app { height: 100vh; }
+
+  .head { display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 12px; color: #fff;
+    background: radial-gradient(120% 140% at 0% 0%, #1d4ed8 0%, #0b1a4a 55%, #070f2b 100%); }
+  .head .ava { width: 34px; height: 34px; border-radius: 50%; padding: 2px; flex: none;
+    background: linear-gradient(135deg, #7dd3fc, #2563eb); box-shadow: 0 0 12px rgba(56,189,248,.5); }
+  .head .ava img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+  .head .title { flex: 1; min-width: 0; }
+  .head .name { font-weight: 700; font-size: 15px; }
+  .head .sub { font-size: 11px; color: #bfdbfe; display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; }
+  .head .dot { width: 7px; height: 7px; border-radius: 50%; background: #34d399; box-shadow: 0 0 8px #34d399; flex: none; }
+  .head .dot.listening { background: #f87171; box-shadow: 0 0 8px #f87171; animation: blink 1s infinite; }
+  .head .dot.busy { background: #fbbf24; box-shadow: 0 0 8px #fbbf24; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .35; } }
+  .tools { display: flex; gap: 4px; }
+  .ib { width: 28px; height: 28px; border-radius: 8px; border: 0; cursor: pointer; display: grid; place-items: center;
+    background: rgba(255,255,255,.1); color: #e0e7ff; font-size: 10px; font-weight: 700; }
+  .ib:hover { background: rgba(255,255,255,.22); color: #fff; }
+  .ib svg { width: 14px; height: 14px; }
+
+  .body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .window .body { flex: 1; overflow-y: auto; }
+  .msg { display: flex; gap: 6px; align-items: flex-end; }
+  .msg.me { justify-content: flex-end; }
+  .msg .mini { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; flex: none; box-shadow: 0 0 0 2px #fff; }
+  .bubble { max-width: 88%; padding: 9px 12px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; }
+  .me .bubble { background: linear-gradient(135deg, #3b82f6, #2563eb); color: #fff; border-radius: 14px 14px 4px 14px; }
+  .bot .bubble { background: #fff; border-radius: 14px 14px 14px 4px; box-shadow: 0 1px 3px rgba(15,23,42,.08); }
+  .bubble.live { color: #64748b; font-style: italic; background: #fff; }
+  .typing { display: inline-flex; gap: 4px; padding: 4px 2px; }
+  .typing i { width: 7px; height: 7px; border-radius: 50%; background: #93c5fd; animation: bounce 1.2s infinite; }
+  .typing i:nth-child(2) { animation-delay: .15s; } .typing i:nth-child(3) { animation-delay: .3s; }
+  @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: .6; } 30% { transform: translateY(-5px); opacity: 1; } }
+
+  .list { background: #fff; border-radius: 14px; box-shadow: 0 1px 3px rgba(15,23,42,.08); overflow: hidden; }
+  .list .cap { padding: 8px 12px; font-size: 11px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid #f1f5f9; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid #f1f5f9; }
+  .row:first-of-type { border-top: 0; }
+  .initials { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; flex: none; font-size: 11px; font-weight: 700; color: #fff; }
+  .row .who { flex: 1; min-width: 0; }
+  .row .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .dt { font-size: 12px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .act { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; flex: none; }
+  .act svg { width: 14px; height: 14px; }
+  .act.call { background: #dcfce7; color: #15803d; }
+  .act.open { background: #dbeafe; color: #1d4ed8; }
+
+  .pill { border: 0; border-radius: 999px; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .pill.primary { background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: #fff; box-shadow: 0 4px 12px rgba(37,99,235,.3); }
+  .pill.ghost { background: #fff; color: #334155; box-shadow: 0 0 0 1px #e2e8f0 inset; }
+  .confirm { display: flex; gap: 8px; padding-left: 28px; }
+
+  .welcome { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 6px 2px; }
+  .window .welcome { margin: auto 0; }
+  .welcome .big { width: 72px; height: 72px; border-radius: 50%; padding: 3px; background: linear-gradient(135deg, #7dd3fc, #2563eb, #1e3a8a); }
+  .welcome .big img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; border: 3px solid #fff; }
+  .welcome h3 { margin: 4px 0 0; font-size: 16px; }
+  .welcome p { margin: 0; color: #64748b; line-height: 1.45; }
+  .chips { display: flex; flex-direction: column; gap: 6px; width: 100%; margin-top: 4px; }
+  .chip { text-align: left; border: 0; background: #fff; color: #1e3a8a; border-radius: 10px; padding: 9px 12px; font-size: 13px; cursor: pointer; box-shadow: 0 0 0 1px #e2e8f0 inset; }
+  .chip:hover { box-shadow: 0 0 0 1.5px #60a5fa inset; }
+
+  .foot { padding: 0 10px 12px; }
+  .bar { display: flex; align-items: center; gap: 6px; background: #fff; border-radius: 999px; padding: 4px 4px 4px 14px; box-shadow: 0 0 0 1px #e2e8f0, 0 4px 14px rgba(15,23,42,.06); }
+  .bar:focus-within { box-shadow: 0 0 0 2px #60a5fa; }
+  .bar input { flex: 1; min-width: 0; border: 0; outline: none; font-size: 14px; background: transparent; color: #0f172a; }
+  .round { width: 34px; height: 34px; border-radius: 50%; border: 0; cursor: pointer; display: grid; place-items: center; flex: none; color: #fff; background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
+  .round.rec { background: linear-gradient(135deg, #f87171, #dc2626); }
+  .round.send { display: none; } .bar.typing .round.send { display: grid; } .bar.typing .round.mic { display: none; }
+  .note { padding: 18px 14px; text-align: center; color: #475569; line-height: 1.5; }
+  .note b { color: #0f172a; display: block; margin-bottom: 4px; font-size: 15px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="head">
+    <div class="ava"><img src="/claudio-extension/icons/claudio.png" alt=""></div>
+    <div class="title">
+      <div class="name">Claudio</div>
+      <div class="sub"><span class="dot"></span><span class="status-text"></span></div>
+    </div>
+    <div class="tools">
+      <button class="ib" data-act="lang"></button>
+      <button class="ib" data-act="mute"></button>
+      <button class="ib" data-act="new"></button>
+      <button class="ib" data-act="disconnect"></button>
+    </div>
+  </div>
+  <div class="body"></div>
+  <div class="foot">
+    <div class="bar">
+      <input type="text">
+      <button class="round mic" data-act="mic"></button>
+      <button class="round send" data-act="send"></button>
+    </div>
+  </div>
+</div>
+<script>
+(() => {
+  const API = "/.netlify/functions";
+  const AVATAR = "/claudio-extension/icons/claudio.png";
+  const CONVERSATION_IDLE_MS = 15 * 60 * 1000;
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const params = new URLSearchParams(location.search);
+  const CONTEXT = params.get("context") || "";
+  const SIGNATURE = params.get("signature") || "";
+  const IS_WINDOW = params.get("mode") === "window";
+  if (IS_WINDOW) document.documentElement.classList.add("window");
+
+  // Display only; the server re-checks the signature before trusting any of it.
+  let ctx = {};
+  try {
+    ctx = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(CONTEXT), (c) => c.charCodeAt(0))));
+  } catch {}
+  const person = ctx.person || null;
+  const personName = person ? `${person.firstName || ""} ${person.lastName || ""}`.trim() : "";
+  const fubOrigin = ctx.account && ctx.account.domain ? `https://${ctx.account.domain}.followupboss.com` : "https://app.followupboss.com";
+
+  // Browser storage is a convenience only (it can be blocked inside FUB's iframe).
+  const store = {
+    get(k) { try { return JSON.parse(localStorage.getItem(`claudio.${k}`)); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(`claudio.${k}`, JSON.stringify(v)); } catch {} },
+  };
+
+  const state = {
+    lang: params.get("lang") || store.get("lang") || ((navigator.language || "en-US").toLowerCase().startsWith("es") ? "es-US" : "en-US"),
+    muted: Boolean(store.get("muted")),
+    listening: false,
+    busy: false,
+    connected: false,
+    connecting: false,
+    blocked: null, // message shown instead of the chat
+    conversationId: params.get("c") || store.get("conversationId"),
+    lastActivity: params.get("c") ? Date.now() : store.get("lastActivity") || 0,
+    answer: null,
+  };
+
+  const T = {
+    "en-US": {
+      hello: "Hi, I'm Claudio 👋",
+      hint: personName ? `Ask me anything about ${personName} or your other leads.` : "Ask me anything about your leads.",
+      suggestions: personName
+        ? [`What's the latest with ${personName}?`, "Who should I call today?", "Move this lead to the pond"]
+        : ["Who should I call today?", "What tasks do I have due today?"],
+      ready: personName ? `On ${personName}` : "Ready to help",
+      listening: "Listening…", thinking: "Thinking…", placeholder: "Ask Claudio…",
+      connect: "Connect my FUB account",
+      connectHint: "Sign in once with Follow Up Boss so I can see your leads.",
+      connecting: "Finish signing in on the window that just opened…",
+      popupBlocked: "Your browser blocked the window. Allow pop-ups for followupboss.com and try again.",
+      yes: "Yes, do it", no: "Cancel", newChat: "New conversation", mute: "Mute voice", unmute: "Turn voice on",
+      lang: "Switch language", call: "Call", open: "Open in FUB", disconnect: "Sign out",
+      people: (n) => `${n} ${n === 1 ? "person" : "people"}`,
+      voice: "Talk to Claudio (opens a small window, FUB doesn't allow the mic here)",
+      noMic: "Voice isn't supported in this browser. You can still type.",
+      micBlocked: "Microphone is blocked. Allow it in the address bar of this window.",
+      unauthorized: ["No access", "This Claudio link isn't valid. Reload the page in Follow Up Boss."],
+      account_not_found: ["Not set up for this account", "Claudio is only available to Power Real Estate Group."],
+      user_not_found: ["User not found", "We couldn't match your FUB user. Ask your admin to check your access."],
+      person_not_found: ["Lead not found", "Claudio couldn't find this person, but you can still ask about your other leads."],
+      offline: "I can't reach the Claudio server. Check your internet connection.",
+      slow: "That took too long. Try a narrower question.",
+      oops: "Something went wrong on my side. Please try again.",
+      confirmYes: "Yes, go ahead.",
+    },
+    "es-US": {
+      hello: "Hola, soy Claudio 👋",
+      hint: personName ? `Pregúntame lo que quieras de ${personName} o de tus otros leads.` : "Pregúntame lo que quieras de tus leads.",
+      suggestions: personName
+        ? [`¿Qué hay de nuevo con ${personName}?`, "¿A quién debo llamar hoy?", "Mueve este lead al pond"]
+        : ["¿A quién debo llamar hoy?", "¿Qué tareas tengo para hoy?"],
+      ready: personName ? `En ${personName}` : "Listo para ayudarte",
+      listening: "Escuchando…", thinking: "Pensando…", placeholder: "Pregúntale a Claudio…",
+      connect: "Conectar mi cuenta de FUB",
+      connectHint: "Inicia sesión una vez con Follow Up Boss para que pueda ver tus leads.",
+      connecting: "Termina de iniciar sesión en la ventana que se abrió…",
+      popupBlocked: "Tu navegador bloqueó la ventana. Permite pop-ups para followupboss.com e intenta de nuevo.",
+      yes: "Sí, hazlo", no: "Cancelar", newChat: "Nueva conversación", mute: "Silenciar voz", unmute: "Activar voz",
+      lang: "Cambiar idioma", call: "Llamar", open: "Abrir en FUB", disconnect: "Cerrar sesión",
+      people: (n) => `${n} ${n === 1 ? "persona" : "personas"}`,
+      voice: "Háblale a Claudio (abre una ventanita, FUB no permite el micrófono aquí)",
+      noMic: "Este navegador no soporta voz. Puedes escribir.",
+      micBlocked: "El micrófono está bloqueado. Permítelo en la barra de direcciones de esta ventana.",
+      unauthorized: ["Sin acceso", "Este enlace de Claudio no es válido. Recarga la página en Follow Up Boss."],
+      account_not_found: ["Cuenta no configurada", "Claudio solo está disponible para Power Real Estate Group."],
+      user_not_found: ["Usuario no encontrado", "No pudimos encontrar tu usuario de FUB. Pide a tu admin que revise tu acceso."],
+      person_not_found: ["Lead no encontrado", "Claudio no encontró a esta persona, pero puedes preguntar por tus otros leads."],
+      offline: "No puedo conectarme al servidor de Claudio. Revisa tu internet.",
+      slow: "Eso tardó demasiado. Intenta una pregunta más específica.",
+      oops: "Algo salió mal de mi lado. Intenta de nuevo.",
+      confirmYes: "Sí, confirmo.",
+    },
+  };
+  const t = (key) => T[state.lang][key];
+
+  const ICONS = {
+    mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg>',
+    stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>',
+    send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+    sound: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
+    muted: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="m22 9-6 6M16 9l6 6"/></svg>',
+    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+    logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>',
+    phone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></svg>',
+    arrow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M8 7h9v9"/></svg>',
+  };
+
+  const $ = (sel) => document.querySelector(sel);
+  const bodyEl = $(".body");
+  const bar = $(".bar");
+  const input = $(".bar input");
+  $('[data-act="new"]').innerHTML = ICONS.plus;
+  $('[data-act="disconnect"]').innerHTML = ICONS.logout;
+  $('[data-act="send"]').innerHTML = ICONS.send;
+
+  function el(tag, attrs = {}, text) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (text != null) node.textContent = text;
+    return node;
+  }
+  function avatarImg(cls) {
+    return el("img", { class: cls, alt: "", src: AVATAR });
+  }
+  function botMsg(content) {
+    const row = el("div", { class: "msg bot" });
+    const bubble = el("div", { class: "bubble" });
+    if (typeof content === "string") bubble.textContent = content;
+    else bubble.append(content);
+    row.append(avatarImg("mini"), bubble);
+    return row;
+  }
+  function welcome(extra) {
+    const w = el("div", { class: "welcome" });
+    const big = el("div", { class: "big" });
+    big.append(avatarImg(""));
+    w.append(big, el("h3", {}, t("hello")), ...extra);
+    return w;
+  }
+
+  // mode: undefined | "listening" | "thinking"; live = interim transcript
+  function render(mode, live) {
+    $('[data-act="lang"]').textContent = state.lang === "es-US" ? "ES" : "EN";
+    $('[data-act="lang"]').title = t("lang");
+    $('[data-act="mute"]').innerHTML = state.muted ? ICONS.muted : ICONS.sound;
+    $('[data-act="mute"]').title = state.muted ? t("unmute") : t("mute");
+    $('[data-act="new"]').title = t("newChat");
+    $('[data-act="disconnect"]').title = t("disconnect");
+    $('[data-act="disconnect"]').style.display = state.connected ? "" : "none";
+    input.placeholder = t("placeholder");
+    const micBtn = $('[data-act="mic"]');
+    micBtn.innerHTML = state.listening ? ICONS.stop : ICONS.mic;
+    micBtn.classList.toggle("rec", state.listening);
+    micBtn.title = IS_WINDOW ? "" : t("voice");
+    $(".head .dot").className = `dot ${state.listening ? "listening" : state.busy ? "busy" : ""}`;
+    $(".status-text").textContent = state.listening ? t("listening") : state.busy ? t("thinking") : t("ready");
+    $(".foot").style.display = state.blocked || !state.connected ? "none" : "";
+
+    bodyEl.replaceChildren();
+    if (state.blocked) {
+      const [title, text] = t(state.blocked);
+      const note = el("div", { class: "note" });
+      note.append(el("b", {}, title), document.createTextNode(text));
+      bodyEl.append(note);
+      return;
+    }
+    if (!state.connected) {
+      bodyEl.append(
+        welcome(
+          state.connecting
+            ? [el("p", {}, t("connecting"))]
+            : [el("p", {}, t("connectHint")), el("button", { class: "pill primary", "data-act": "connect" }, t("connect"))]
+        )
+      );
+      return;
+    }
+
+    const a = state.answer;
+    if (!a && mode !== "listening") {
+      const chips = el("div", { class: "chips" });
+      for (const s of t("suggestions")) chips.append(el("button", { class: "chip", "data-say": s }, s));
+      bodyEl.append(welcome([el("p", {}, t("hint")), chips]));
+      return;
+    }
+    if (mode === "listening") {
+      const me = el("div", { class: "msg me" });
+      me.append(el("div", { class: "bubble live" }, live || t("listening")));
+      bodyEl.append(me);
+      return;
+    }
+    if (a.question) {
+      const me = el("div", { class: "msg me" });
+      me.append(el("div", { class: "bubble" }, a.question));
+      bodyEl.append(me);
+    }
+    if (mode === "thinking") {
+      const dots = el("span", { class: "typing" });
+      dots.innerHTML = "<i></i><i></i><i></i>";
+      bodyEl.append(botMsg(dots));
+      return;
+    }
+    bodyEl.append(botMsg(a.display || a.speech || ""));
+    if (a.items && a.items.length) bodyEl.append(renderItems(a.items));
+    if (a.needs_confirmation) {
+      const row = el("div", { class: "confirm" });
+      row.append(
+        el("button", { class: "pill primary", "data-act": "yes" }, t("yes")),
+        el("button", { class: "pill ghost", "data-act": "no" }, t("no"))
+      );
+      bodyEl.append(row);
+    }
+  }
+
+  const HUES = [217, 262, 190, 152, 330, 24, 280, 200];
+  function initials(name) {
+    const parts = String(name || "?").trim().split(/\s+/);
+    return ((parts[0] || "?")[0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
+  }
+  function hueFor(name) {
+    let h = 0;
+    for (const ch of String(name)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    return HUES[h % HUES.length];
+  }
+  function renderItems(items) {
+    const list = el("div", { class: "list" });
+    list.append(el("div", { class: "cap" }, t("people")(items.length)));
+    for (const item of items) {
+      const row = el("div", { class: "row" });
+      const ini = el("div", { class: "initials" }, initials(item.name));
+      const hue = hueFor(item.name);
+      ini.style.background = `linear-gradient(135deg, hsl(${hue} 80% 62%), hsl(${hue} 70% 45%))`;
+      const who = el("div", { class: "who" });
+      who.append(el("div", { class: "nm" }, item.name || "—"));
+      if (item.detail) who.append(el("div", { class: "dt" }, item.detail));
+      row.append(ini, who);
+      // The iframe can't navigate FUB itself, so links open a new tab.
+      if (item.phone) {
+        const call = el("a", { class: "act call", target: "_blank", href: `tel:${item.phone.replace(/[^\d+]/g, "")}`, title: `${t("call")} ${item.phone}` });
+        call.innerHTML = ICONS.phone;
+        row.append(call);
+      }
+      if (item.person_id) {
+        const open = el("a", { class: "act open", target: "_blank", rel: "noopener", href: `${fubOrigin}/2/people/view/${item.person_id}`, title: t("open") });
+        open.innerHTML = ICONS.arrow;
+        row.append(open);
+      }
+      list.append(row);
+    }
+    return list;
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  function randomHex(bytes) {
+    return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  async function api(action, extra = {}) {
+    const res = await fetch(`${API}/claudio-app-api`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, context: CONTEXT, signature: SIGNATURE, ...extra }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { status: res.status, ok: res.ok, data };
+  }
+
+  function save() {
+    store.set("lang", state.lang);
+    store.set("muted", state.muted);
+    store.set("conversationId", state.conversationId);
+    store.set("lastActivity", state.lastActivity);
+  }
+  function resetConversation() {
+    state.conversationId = randomHex(16);
+    state.answer = null;
+    state.lastActivity = Date.now();
+    save();
+  }
+
+  // ---------- connect ----------
+  async function connect() {
+    const stateId = randomHex(32);
+    const popup = window.open(`${API}/claudio-oauth-start?state=${stateId}`, "claudio-connect", "width=520,height=720");
+    if (!popup) {
+      state.answer = null;
+      bodyEl.replaceChildren(botMsg(t("popupBlocked")));
+      return;
+    }
+    state.connecting = true;
+    render();
+    const deadline = Date.now() + 5 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await sleep(2000);
+      const r = await api("link", { state: stateId }).catch(() => null);
+      if (r && r.ok && r.data.status === "connected") {
+        state.connected = true;
+        try { popup.close(); } catch {}
+        break;
+      }
+    }
+    state.connecting = false;
+    render();
+  }
+
+  // ---------- speech ----------
+  function speak(text) {
+    if (state.muted || !text || !window.speechSynthesis) return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = state.lang;
+    const prefix = state.lang.slice(0, 2);
+    const voices = speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith(prefix));
+    u.voice = voices.find((v) => /natural|google|online/i.test(v.name)) || voices[0] || null;
+    u.rate = 1.05;
+    speechSynthesis.speak(u);
+  }
+
+  // FUB's sandboxed iframe has no microphone permission; the popup is a
+  // normal window on this site, so voice works there.
+  function openVoiceWindow() {
+    if (!state.conversationId || Date.now() - state.lastActivity > CONVERSATION_IDLE_MS) resetConversation();
+    const url = new URL(location.href);
+    url.searchParams.set("mode", "window");
+    url.searchParams.set("c", state.conversationId);
+    url.searchParams.set("lang", state.lang);
+    const w = window.open(url.toString(), "claudio-voice", "width=440,height=700");
+    if (!w) bodyEl.replaceChildren(botMsg(t("popupBlocked")));
+  }
+
+  let recognition = null;
+  function listen() {
+    if (!IS_WINDOW) return openVoiceWindow();
+    if (!SpeechRecognition) {
+      state.answer = { display: t("noMic"), items: [] };
+      render();
+      return;
+    }
+    if (state.listening) {
+      recognition && recognition.stop();
+      return;
+    }
+    if (state.busy) return;
+    if (window.speechSynthesis) speechSynthesis.cancel();
+    recognition = new SpeechRecognition();
+    recognition.lang = state.lang;
+    recognition.interimResults = true;
+    let finalText = "";
+    recognition.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) finalText += r[0].transcript;
+        else interim += r[0].transcript;
+      }
+      render("listening", `${finalText}${interim}`);
+    };
+    recognition.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") state.answer = { display: t("micBlocked"), items: [] };
+    };
+    recognition.onend = () => {
+      state.listening = false;
+      const text = finalText.trim();
+      if (text) send(text);
+      else render();
+    };
+    state.listening = true;
+    render("listening");
+    recognition.start();
+  }
+
+  // ---------- ask ----------
+  async function ask(text) {
+    const jobId = randomHex(16);
+    const start = await api("ask", { jobId, conversationId: state.conversationId, text }).catch(() => null);
+    if (!start) return { error: true, speech: t("offline") };
+    if (start.data.needsConnect) return { needsConnect: true };
+    if (!start.ok) return { error: true, speech: t("oops") };
+
+    const deadline = Date.now() + 3 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await sleep(1500);
+      const r = await api("result", { jobId }).catch(() => null);
+      if (!r) continue;
+      if (r.data.needsConnect) return { needsConnect: true };
+      if (r.data.status === "pending") continue;
+      if (!r.ok) return { error: true, speech: r.data.speech || t("oops"), display: r.data.display };
+      return r.data;
+    }
+    return { error: true, speech: t("slow") };
+  }
+
+  async function send(text) {
+    if (state.busy || !text.trim() || !state.connected) return;
+    if (!state.conversationId || Date.now() - state.lastActivity > CONVERSATION_IDLE_MS) resetConversation();
+    state.busy = true;
+    state.answer = { question: text, items: [] };
+    render("thinking");
+    const res = await ask(text);
+    state.busy = false;
+    state.lastActivity = Date.now();
+    save();
+    if (res.needsConnect) {
+      state.connected = false;
+      state.answer = null;
+      render();
+      return;
+    }
+    state.answer = {
+      question: text,
+      speech: res.speech,
+      display: res.display || res.speech,
+      needs_confirmation: Boolean(res.needs_confirmation),
+      items: Array.isArray(res.items) ? res.items : [],
+    };
+    render();
+    speak(res.speech);
+  }
+
+  function submitTyped() {
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    bar.classList.remove("typing");
+    send(text);
+  }
+
+  // ---------- events ----------
+  document.addEventListener("click", async (e) => {
+    const chip = e.target.closest("[data-say]");
+    if (chip) return send(chip.getAttribute("data-say"));
+    const act = e.target.closest("[data-act]")?.getAttribute("data-act");
+    if (!act) return;
+    if (act === "lang") {
+      state.lang = state.lang === "es-US" ? "en-US" : "es-US";
+      save();
+      render();
+    } else if (act === "mute") {
+      state.muted = !state.muted;
+      if (state.muted && window.speechSynthesis) speechSynthesis.cancel();
+      save();
+      render();
+    } else if (act === "new") {
+      if (window.speechSynthesis) speechSynthesis.cancel();
+      resetConversation();
+      render();
+    } else if (act === "mic") {
+      listen();
+    } else if (act === "send") {
+      submitTyped();
+    } else if (act === "yes" || act === "no") {
+      send(act === "yes" ? t("confirmYes") : "No, cancel that.");
+    } else if (act === "connect") {
+      connect();
+    } else if (act === "disconnect") {
+      await api("disconnect").catch(() => null);
+      state.connected = false;
+      resetConversation();
+      render();
+    }
+  });
+  input.addEventListener("input", () => bar.classList.toggle("typing", Boolean(input.value.trim())));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing) submitTyped();
+  });
+  if (window.speechSynthesis) speechSynthesis.onvoiceschanged = () => {};
+
+  // ---------- start ----------
+  async function start() {
+    if (Date.now() - state.lastActivity > CONVERSATION_IDLE_MS) resetConversation();
+    // FUB's app preview passes debugState to show each state; only "working" runs the real app.
+    if (ctx.debugState && ctx.debugState !== "working") {
+      state.blocked = T[state.lang][ctx.debugState] ? ctx.debugState : "unauthorized";
+      return render();
+    }
+    render();
+    const r = await api("status").catch(() => null);
+    if (!r) {
+      bodyEl.replaceChildren(botMsg(t("offline")));
+      return;
+    }
+    if (r.status === 403) {
+      state.blocked = "unauthorized";
+      return render();
+    }
+    if (!r.ok) {
+      bodyEl.replaceChildren(botMsg(r.data.error || t("oops")));
+      return;
+    }
+    state.connected = Boolean(r.data.connected);
+    render();
+    if (IS_WINDOW && state.connected) listen();
+  }
+  start();
+})();
+</script>
+</body>
+</html>

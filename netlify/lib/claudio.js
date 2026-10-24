@@ -29,6 +29,9 @@ const sessionStore = () => store("claudio-sessions");
 const convoStore = () => store("claudio-conversations");
 // Finished answers from claudio-ask-background, picked up by claudio-result.
 const jobStore = () => store("claudio-jobs");
+// Embedded-app users: "<accountId>:<userId>" -> session id, so the app inside
+// FUB finds the agent's session from FUB's signed context, not browser storage.
+const appLinkStore = () => store("claudio-app-links");
 
 function randomId(bytes = 32) {
   return crypto.randomBytes(bytes).toString("hex");
@@ -209,6 +212,23 @@ async function currentUserFor(sessionId, mcp, toolName) {
   }
 }
 
+// FUB embedded apps get ?context=<base64 JSON>&signature=<hex HMAC-SHA256 of
+// the raw context with the app's secret key>. Returns the decoded context, or
+// null when the signature doesn't match.
+function verifyFubContext(context, signature) {
+  const secret = process.env.CLAUDIO_APP_SECRET;
+  if (!secret || typeof context !== "string" || typeof signature !== "string") return null;
+  const expected = crypto.createHmac("sha256", secret).update(context).digest("hex");
+  const a = Buffer.from(expected);
+  const b = Buffer.from(signature.toLowerCase());
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    return JSON.parse(Buffer.from(context, "base64").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
 function json(statusCode, body) {
   return {
     statusCode,
@@ -227,11 +247,13 @@ module.exports = {
   sessionStore,
   convoStore,
   jobStore,
+  appLinkStore,
   randomId,
   pkcePair,
   tokenRequest,
   accessTokenFor,
   openMcp,
   currentUserFor,
+  verifyFubContext,
   json,
 };
