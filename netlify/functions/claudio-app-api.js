@@ -4,9 +4,30 @@
 // session is kept server side (appLinkStore), linked once through the same
 // OAuth flow the extension uses. Questions reuse claudio-ask-background and
 // the same job store as the extension.
-const { pendingStore, jobStore, appLinkStore, verifyFubContext, json } = require("../lib/claudio");
+const { pendingStore, sessionStore, jobStore, appLinkStore, verifyFubContext, json } = require("../lib/claudio");
+const { fub } = require("../lib/claudio-skills");
 
 const SITE = process.env.URL || "https://fub-zhl-webhook.netlify.app";
+
+// Skills need to know who is asking. FUB's signed context already says, so the
+// session gets that user (with their FUB role) instead of relying on the MCP
+// get-current-user lookup, which sometimes comes back empty.
+async function rememberUser(sessionId, ctxUser) {
+  const sessions = sessionStore();
+  const session = await sessions.get(sessionId, { type: "json" });
+  if (!session) return;
+  if (session.user && session.user.id === ctxUser.id && session.user.role) return;
+  if (session.user && session.user.id !== ctxUser.id) {
+    console.warn(`Claudio app: session user ${session.user.id} differs from FUB user ${ctxUser.id}; using FUB's`);
+  }
+  let role;
+  try {
+    role = (await fub(`/users/${ctxUser.id}`)).role;
+  } catch (err) {
+    console.error("Claudio app role lookup failed:", err.message);
+  }
+  await sessions.setJSON(sessionId, { ...session, user: { id: ctxUser.id, name: ctxUser.name, email: ctxUser.email, role } });
+}
 
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") return json(405, { error: "Method Not Allowed" });
@@ -47,6 +68,7 @@ exports.handler = async (event) => {
       if (!session) return json(200, { needsConnect: true });
       const { jobId, conversationId, text } = body;
       if (!/^[a-f0-9]{32}$/.test(jobId || "")) return json(400, { error: "invalid jobId" });
+      await rememberUser(session, ctx.user);
       const person = ctx.person || {};
       const personName = `${person.firstName || ""} ${person.lastName || ""}`.trim();
       const res = await fetch(`${SITE}/.netlify/functions/claudio-ask-background`, {

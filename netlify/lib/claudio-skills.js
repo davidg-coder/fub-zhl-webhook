@@ -96,4 +96,4 @@ async function runSkill(name, input, user) {
   return { text: `Unknown skill ${name}.`, isError: true };
 }
 
-module.exports = { SKILL_DEFS, SKILL_NAMES, runSkill };
+module.exports = { SKILL_DEFS, SKILL_NAMES, runSkill, fub };
