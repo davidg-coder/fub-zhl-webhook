@@ -37,6 +37,19 @@ const SKILL_DEFS = [
       required: ["personId"],
     },
   },
+  {
+    name: "get_lead_details",
+    description:
+      "Read one lead's stage, source, assigned agent, tags, price, key dates and most recent notes straight from FUB. Use it for \"what's the latest with…\", \"what stage is…\", \"read me the notes\", and whenever a Follow Up Boss tool for notes or stage is missing or fails.",
+    input_schema: {
+      type: "object",
+      properties: {
+        personId: { type: "integer", description: "FUB person id of the lead." },
+        notes: { type: "integer", description: "How many recent notes to include (default 5, max 15)." },
+      },
+      required: ["personId"],
+    },
+  },
 ];
 
 const SKILL_NAMES = new Set(SKILL_DEFS.map((d) => d.name));
@@ -90,9 +103,58 @@ async function moveLeadToPond(input, user) {
   };
 }
 
+// Reads go through the shared API key, so they get the same ownership check
+// as writes: agents only see their own leads here.
+async function getLeadDetails(input, user) {
+  if (!user || !user.id) return { text: "Can't tell who is signed in, so I can't read leads right now.", isError: true };
+  const personId = Number(input.personId);
+  if (!Number.isInteger(personId) || personId <= 0) return { text: "A valid personId is required.", isError: true };
+
+  const person = await fub(`/people/${personId}`);
+  const name = person.name || `${person.firstName || ""} ${person.lastName || ""}`.trim() || `Lead #${personId}`;
+  const isBroker = /broker|admin|owner/i.test(user.role || "");
+  if (!isBroker && person.assignedUserId !== user.id) {
+    return { text: `${name} is assigned to ${person.assignedTo || "someone else"}, so I can't read their details for ${user.name}.`, isError: true };
+  }
+
+  const limit = Math.min(Math.max(Number(input.notes) || 5, 1), 15);
+  let notes = [];
+  try {
+    const data = await fub(`/notes?personId=${personId}&limit=${limit}&sort=-created`);
+    notes = (data.notes || []).map((n) => ({
+      created: n.created,
+      by: n.createdBy,
+      subject: n.subject || undefined,
+      body: String(n.body || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 600),
+    }));
+  } catch (err) {
+    console.error("Claudio skill get_lead_details notes failed:", err.message);
+  }
+  return {
+    text: JSON.stringify({
+      person: {
+        id: personId,
+        name,
+        stage: person.stage,
+        source: person.source,
+        assignedTo: person.assignedTo,
+        pond: person.assignedPondId ? `pond ${person.assignedPondId}` : undefined,
+        tags: person.tags,
+        price: person.price || undefined,
+        created: person.created,
+        lastActivity: person.lastActivity,
+        phones: (person.phones || []).map((p) => p.value),
+      },
+      notes,
+    }),
+    isError: false,
+  };
+}
+
 async function runSkill(name, input, user) {
   if (!process.env.FUB_API_KEY) return { text: "FUB_API_KEY is not set on Netlify.", isError: true };
   if (name === "move_lead_to_pond") return moveLeadToPond(input || {}, user);
+  if (name === "get_lead_details") return getLeadDetails(input || {}, user);
   return { text: `Unknown skill ${name}.`, isError: true };
 }
 
