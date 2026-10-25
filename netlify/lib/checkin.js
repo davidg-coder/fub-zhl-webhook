@@ -329,9 +329,16 @@ async function applyPlan(rec) {
   const personId = rec.person.id;
   const done = [];
   if (plan.note) {
+    // The full Slack exchange goes in too, so the record lives in FUB and not
+    // only in a DM nobody else can see.
+    const convo = rec.transcript.map((t) => `${t.from === "Agent" ? rec.agent.name : "Claudio"}: ${t.text}`).join("\n");
     await fub("/notes", {
       method: "POST",
-      body: JSON.stringify({ personId, subject: `Appointment recap${rec.appt.type ? ` (${rec.appt.type})` : ""}`, body: `${plan.note}\n\n— logged by ${rec.agent.name} via Claudio` }),
+      body: JSON.stringify({
+        personId,
+        subject: `Appointment recap${rec.appt.type ? ` (${rec.appt.type})` : ""}`,
+        body: `${plan.note}\n\n— logged by ${rec.agent.name} via Claudio\n\nConversation:\n${convo}`,
+      }),
     });
     done.push("note");
   }
