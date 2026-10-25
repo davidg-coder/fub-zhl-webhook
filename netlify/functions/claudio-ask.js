@@ -168,7 +168,7 @@ async function runAsk(body) {
     if (/\b401\b|\b403\b/.test(err.message)) return json(401, { error: "reconnect" });
     return json(502, { error: "fub_mcp", speech: "I couldn't reach Follow Up Boss just now. Please try again." });
   }
-  const user = tools.currentUserTool ? await currentUserFor(session, mcp, tools.currentUserTool) : null;
+  const user = await currentUserFor(session, mcp, tools.currentUserTool);
 
   const convos = convoStore();
   const convoKey = `${session}/${conversationId}`;

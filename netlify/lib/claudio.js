@@ -199,6 +199,7 @@ async function currentUserFor(sessionId, mcp, toolName) {
   const sessions = sessionStore();
   const session = await sessions.get(sessionId, { type: "json" });
   if (session && session.user) return session.user;
+  if (!toolName) return null;
   try {
     const { data } = await mcp.callTool(toolName, {});
     const u = data && (data.session?.user || data.user);
