@@ -125,14 +125,24 @@ async function fubList(path, key) {
   return out;
 }
 
-// FUB's appointment outcomes. The list key isn't consistently cased across FUB
-// endpoints, so take whichever array the response carries.
-async function fubOutcomes() {
-  const data = await fub("/appointmentOutcomes?limit=100");
+// FUB's appointment outcomes and types. The list key isn't consistently cased
+// across FUB endpoints, so take whichever array the response carries.
+async function fubAnyList(path, what) {
+  const data = await fub(path);
   const list = Object.entries(data).find(([k, v]) => k !== "_metadata" && Array.isArray(v));
-  const outcomes = ((list && list[1]) || []).filter((o) => o && o.id && o.name);
-  if (!outcomes.length) console.warn(`Check-in: no appointment outcomes from FUB (keys: ${Object.keys(data).join(",")})`);
-  return outcomes;
+  const items = ((list && list[1]) || []).filter((o) => o && o.id && o.name);
+  if (!items.length) console.warn(`Check-in: no ${what} from FUB (keys: ${Object.keys(data).join(",")})`);
+  return items;
+}
+const fubOutcomes = () => fubAnyList("/appointmentOutcomes?limit=100", "appointment outcomes");
+const fubApptTypes = () => fubAnyList("/appointmentTypes?limit=100", "appointment types");
+
+// "2026-10-31" + "14:00" in Pacific time -> ISO timestamp.
+function pacificISO(date, time) {
+  const guess = new Date(`${date}T${time}:00Z`);
+  const tz = new Intl.DateTimeFormat("en-US", { timeZone: TZ, timeZoneName: "longOffset" })
+    .formatToParts(guess).find((p) => p.type === "timeZoneName").value;
+  return new Date(`${date}T${time}:00${tz.replace("GMT", "") || "+00:00"}`).toISOString();
 }
 
 const NOT_MET = /no.?show|not met|didn.?t|resched|cancel/i;
@@ -341,13 +351,27 @@ async function sendDigest({ now = Date.now(), log = console.log } = {}) {
 const PLAN_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["reply", "ready", "outcomeId", "note", "stage", "task"],
+  required: ["reply", "ready", "outcomeId", "note", "stage", "appointment", "task"],
   properties: {
     reply: { type: "string", description: "Slack message to the agent: a short follow-up question, or a one-line intro to the plan when ready." },
     ready: { type: "boolean", description: "true when there's enough to log the appointment." },
     outcomeId: { type: ["integer", "null"], description: "Appointment outcome id from the list, or null if unclear." },
     note: { type: "string", description: "FUB note recapping the appointment in the agent's words, third person, 1-4 sentences. Empty if not ready." },
     stage: { type: ["string", "null"], description: "New FUB stage name from the list, only if the agent's answer clearly moves the lead; else null." },
+    appointment: {
+      type: ["object", "null"],
+      description: "Next meeting with the lead to create in FUB, only with an exact date and time from the agent; else null.",
+      additionalProperties: false,
+      required: ["title", "date", "time", "minutes", "typeId", "location"],
+      properties: {
+        title: { type: "string", description: "e.g. Showing: 3 homes in Riverside" },
+        date: { type: "string", description: "YYYY-MM-DD" },
+        time: { type: "string", description: "Start, 24-hour HH:MM, Pacific time" },
+        minutes: { type: "integer", description: "Length in minutes; 60 unless the agent said otherwise" },
+        typeId: { type: ["integer", "null"], description: "Appointment type id from the list, or null" },
+        location: { type: ["string", "null"] },
+      },
+    },
     task: {
       type: ["object", "null"],
       additionalProperties: false,
@@ -363,7 +387,8 @@ const PLAN_SCHEMA = {
 
 const PLAN_PROMPT = `You are Claudio, the assistant for Power Real Estate Group agents. An agent just had an appointment with a lead and is telling you how it went over Slack. Turn what they say into updates for Follow Up Boss.
 
-- Ask at most one short follow-up question at a time, and only for what's missing: how it went (outcome) and the next step. After two follow-ups, or if the agent says that's all, set ready=true with what you have.
+- Ask at most one short follow-up question at a time, and only for what's missing: how it went (outcome) and the next step. After three follow-ups, or if the agent says that's all, set ready=true with what you have.
+- appointment: when the next step is meeting the lead at a set time (a showing, a listing appointment, another meeting or call with them), it goes on the FUB calendar, so you need the exact day and start time. If the agent was vague ("next weekend", "Saturday", "in the afternoon"), ask for the exact day and time before setting ready (for a showing, also the area or address if they didn't say). Work out dates like "this Saturday" from today. Never guess a day or time. If the agent doesn't know yet, appointment is null and the task is to schedule it. Pick typeId from the appointment types when one clearly fits. Don't add a task for the same thing as the appointment.
 - Never invent facts. The note uses only what the agent said, written in third person ("Agent reports…").
 - outcomeId is only for an appointment that didn't happen; if it happened, outcomeId is null.
 - If the agent tapped a stage ("Picked stage: …"), the appointment happened and that's the stage unless they say otherwise.
@@ -373,18 +398,20 @@ const PLAN_PROMPT = `You are Claudio, the assistant for Power Real Estate Group 
 - reply: friendly, plain, at most 2 sentences, in the language the agent wrote in. When ready, just say you've drafted it and they can tap Save or reply with changes; the plan itself is shown separately.`;
 
 async function draftPlan(rec) {
-  const [allOutcomes, stages] = await Promise.all([fubOutcomes(), checkinStages()]);
+  const [allOutcomes, stages, types] = await Promise.all([fubOutcomes(), checkinStages(), fubApptTypes()]);
   // The "Met- …" outcomes add nothing over the stage, so only a didn't-happen
   // outcome is ever logged on the appointment.
   const outcomes = allOutcomes.filter((o) => NOT_MET.test(o.name));
   const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  const weekday = new Date().toLocaleDateString("en-US", { timeZone: TZ, weekday: "long" });
   const context = {
-    today,
+    today: `${today} (${weekday})`,
     appointment: { type: rec.appt.type, title: rec.appt.title, start: fmtTime(rec.appt.start), location: rec.appt.location },
     lead: { name: rec.person.name, currentStage: rec.person.stage },
     agent: rec.agent.name,
     outcomes: outcomes.map((o) => ({ id: o.id, name: o.name })),
     stages,
+    appointmentTypes: types.map((t) => ({ id: t.id, name: t.name })),
   };
   const messages = [
     {
@@ -408,6 +435,16 @@ async function draftPlan(rec) {
   if (plan.stage && !stages.includes(plan.stage)) plan.stage = null;
   if (plan.stage === rec.person.stage) plan.stage = null;
   plan.outcomeName = (outcomes.find((o) => o.id === plan.outcomeId) || {}).name || null;
+  const a = plan.appointment;
+  if (a) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(a.date) && /^\d{2}:\d{2}$/.test(a.time)) {
+      a.start = pacificISO(a.date, a.time);
+      a.end = new Date(Date.parse(a.start) + (a.minutes > 0 ? a.minutes : 60) * 60e3).toISOString();
+      if (a.typeId != null && !types.some((t) => t.id === a.typeId)) a.typeId = null;
+      a.typeName = (types.find((t) => t.id === a.typeId) || {}).name || null;
+    }
+    if (!a.start || Date.parse(a.start) < Date.now()) plan.appointment = null;
+  }
   return plan;
 }
 
@@ -416,6 +453,11 @@ function planBlocks(rec, plan, planId) {
   if (plan.outcomeName) lines.push(`• *Outcome:* ${plan.outcomeName}`);
   if (plan.note) lines.push(`• *Note:* ${plan.note}`);
   if (plan.stage) lines.push(`• *Stage:* ${rec.person.stage || "—"} → *${plan.stage}*`);
+  if (plan.appointment) {
+    const a = plan.appointment;
+    const when = new Date(a.start).toLocaleString("en-US", { timeZone: TZ, weekday: "short", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" });
+    lines.push(`• *Appointment:* ${a.title} · ${when} (${Math.round((Date.parse(a.end) - Date.parse(a.start)) / 60e3)} min)${a.typeName ? ` · ${a.typeName}` : ""}${a.location ? ` · ${a.location}` : ""}`);
+  }
   if (plan.task) lines.push(`• *Task:* ${plan.task.type}: ${plan.task.name} (due ${plan.task.dueDate})`);
   return [
     { type: "section", text: { type: "mrkdwn", text: plan.reply } },
@@ -464,6 +506,21 @@ async function applyPlan(rec) {
   if (plan.stage && !done.includes("stage")) {
     await fub(`/people/${personId}`, { method: "PUT", body: JSON.stringify({ stage: plan.stage }) });
     done.push("stage");
+  }
+  if (plan.appointment && !done.includes("appointment")) {
+    const a = plan.appointment;
+    await fub("/appointments", {
+      method: "POST",
+      body: JSON.stringify({
+        title: a.title,
+        start: a.start,
+        end: a.end,
+        ...(a.typeId ? { typeId: a.typeId } : {}),
+        ...(a.location ? { location: a.location } : {}),
+        invitees: [{ personId }, { userId: rec.agent.fubUserId }],
+      }),
+    });
+    done.push("appointment");
   }
   if (plan.task && !done.includes("task")) {
     await fub("/tasks", {
