@@ -50,6 +50,19 @@ const SKILL_DEFS = [
       required: ["personId"],
     },
   },
+  {
+    name: "get_my_call_list",
+    description:
+      `The signed-in agent's call list straight from FUB: leads with tasks due today or overdue first, then new leads never contacted, then the leads they haven't touched the longest. Each has stage, phone and why they're on the list. Use it for "who should I call today", "who needs follow-up", and call lists of the agent's own leads by stage or tag, and whenever a Follow Up Boss tool for follow-ups fails.`,
+    input_schema: {
+      type: "object",
+      properties: {
+        stage: { type: "string", description: "Only leads in this FUB stage, e.g. \"Hot\" or \"Met with customer\"." },
+        tag: { type: "string", description: "Only leads with this tag." },
+        limit: { type: "integer", description: "How many leads (default 10, max 25)." },
+      },
+    },
+  },
 ];
 
 const SKILL_NAMES = new Set(SKILL_DEFS.map((d) => d.name));
@@ -151,10 +164,80 @@ async function getLeadDetails(input, user) {
   };
 }
 
+// Leads that aren't worth calling from a call list.
+const SKIP_STAGES = /closed|trash|past client|archive|recruit|do not contact/i;
+
+function endOfTodayPacific() {
+  const now = new Date();
+  const date = now.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+  const tz = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", timeZoneName: "longOffset" })
+    .formatToParts(now)
+    .find((p) => p.type === "timeZoneName").value;
+  return new Date(`${date}T23:59:59${tz.replace("GMT", "") || "+00:00"}`).toISOString();
+}
+
+const phoneOf = (p) => ((p.phones || []).find((x) => x.isPrimary) || (p.phones || [])[0] || {}).value || null;
+
+async function getMyCallList(input, user) {
+  if (!user || !user.id) return { text: "Can't tell who is signed in, so I can't build a call list right now.", isError: true };
+  const limit = Math.min(Math.max(Number(input.limit) || 10, 1), 25);
+  const filters = `${input.stage ? `&stage=${encodeURIComponent(input.stage)}` : ""}${input.tag ? `&tags=${encodeURIComponent(input.tag)}` : ""}`;
+  const fields = "id,name,firstName,lastName,stage,phones,lastActivity,created,contacted,assignedPondId,assignedUserId";
+
+  const [tasksRes, peopleRes] = await Promise.all([
+    filters
+      ? Promise.resolve({ tasks: [] })
+      : fub(`/tasks?assignedUserId=${user.id}&isCompleted=false&dueEnd=${encodeURIComponent(endOfTodayPacific())}&limit=100`).catch((err) => {
+          console.error("Claudio skill get_my_call_list tasks failed:", err.message);
+          return { tasks: [] };
+        }),
+    fub(`/people?assignedUserId=${user.id}&sort=lastActivity&limit=100&fields=${fields}${filters}`),
+  ]);
+
+  const usable = (p) => p && !p.assignedPondId && p.assignedUserId === user.id && !SKIP_STAGES.test(p.stage || "");
+  const people = (peopleRes.people || []).filter(usable);
+  const byId = new Map(people.map((p) => [p.id, p]));
+
+  // Earliest open task per lead.
+  const dueBy = new Map();
+  for (const t of tasksRes.tasks || []) {
+    if (!t.personId || t.isCompleted) continue;
+    const due = t.dueDateTime || t.dueDate;
+    if (!dueBy.has(t.personId) || String(due) < String(dueBy.get(t.personId).due)) dueBy.set(t.personId, { due, task: t.name || t.type });
+  }
+  const missing = [...dueBy.keys()].filter((id) => !byId.has(id)).slice(0, limit);
+  const extra = await Promise.all(missing.map((id) => fub(`/people/${id}`).catch(() => null)));
+  for (const p of extra) if (usable(p)) byId.set(p.id, p);
+
+  const out = [];
+  const add = (p, why) => {
+    if (out.length < limit && !out.some((o) => o.id === p.id)) {
+      const name = p.name || `${p.firstName || ""} ${p.lastName || ""}`.trim() || `Lead #${p.id}`;
+      out.push({ id: p.id, name, stage: p.stage, phone: phoneOf(p), lastActivity: p.lastActivity, why });
+    }
+  };
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+  [...dueBy.entries()]
+    .sort((a, b) => String(a[1].due).localeCompare(String(b[1].due)))
+    .forEach(([id, t]) => byId.has(id) && add(byId.get(id), `${String(t.due).slice(0, 10) < today ? "overdue" : "due today"} task: ${t.task}`));
+  people
+    .filter((p) => p.contacted === 0 || p.contacted === false)
+    .sort((a, b) => String(b.created).localeCompare(String(a.created)))
+    .forEach((p) => add(p, "new lead, never contacted"));
+  people.forEach((p) => add(p, "longest since last activity"));
+
+  console.log(`Claudio skill get_my_call_list user=${user.id} tasks=${dueBy.size} people=${people.length} out=${out.length}`);
+  return {
+    text: JSON.stringify({ agent: user.name, totalOpenLeadsChecked: people.length, leadsWithTasksDue: dueBy.size, callList: out }),
+    isError: false,
+  };
+}
+
 async function runSkill(name, input, user) {
   if (!process.env.FUB_API_KEY) return { text: "FUB_API_KEY is not set on Netlify.", isError: true };
   if (name === "move_lead_to_pond") return moveLeadToPond(input || {}, user);
   if (name === "get_lead_details") return getLeadDetails(input || {}, user);
+  if (name === "get_my_call_list") return getMyCallList(input || {}, user);
   return { text: `Unknown skill ${name}.`, isError: true };
 }
 
