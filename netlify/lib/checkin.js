@@ -287,10 +287,18 @@ const PLAN_PROMPT = `You are Claudio, the assistant for Power Real Estate Group 
 - task: the agent's next step with a realistic due date (default 2 business days if they gave none). null if there's no next step.
 - reply: friendly, plain, at most 2 sentences, in the language the agent wrote in. When ready, just say you've drafted it and they can tap Save or reply with changes; the plan itself is shown separately.`;
 
+// Recruiting stages ("Recruiting - …", also the "Recruting-" typo) are their own
+// pipeline; sales leads (Power and Zillow share the same stages) never move
+// into them. Claudio also never closes or trashes a lead.
+const RECRUITING_STAGE = /^recru?i?t/i;
+const PROTECTED_STAGES = /^(closed|trash)$/i;
+
 async function draftPlan(rec) {
   const [outcomes, stages] = await Promise.all([
     fubOutcomes(),
-    fub("/stages?limit=100").then((d) => (d.stages || []).map((s) => s.name)),
+    fubList("/stages?limit=100", "stages").then((list) =>
+      list.map((s) => s.name).filter((n) => !RECRUITING_STAGE.test(n) && !PROTECTED_STAGES.test(n))
+    ),
   ]);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
   const context = {
