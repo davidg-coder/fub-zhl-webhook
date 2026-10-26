@@ -148,7 +148,7 @@ async function onMessage(ev) {
   const rec = apptId ? await load(apptId) : null;
   const text = await messageText(ev);
 
-  const test = text.match(/^(?:test|check-?in)\s*(.*)$/is);
+  const test = text.match(/^(?:test|check-?in)(?:\s+(.*))?$/is);
   if (test && !ev.thread_ts) {
     await testCheckin(ev, (test[1] || "").replace(/[<>]/g, "").trim());
     return;
