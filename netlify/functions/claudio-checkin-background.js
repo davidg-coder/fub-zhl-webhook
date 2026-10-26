@@ -148,8 +148,9 @@ async function onMessage(ev) {
   const rec = apptId ? await load(apptId) : null;
   const text = await messageText(ev);
 
-  if (/^(test|check-?in)$/i.test(text) && !ev.thread_ts) {
-    await testCheckin(ev);
+  const test = text.match(/^(?:test|check-?in)\s*(.*)$/is);
+  if (test && !ev.thread_ts) {
+    await testCheckin(ev, (test[1] || "").replace(/[<>]/g, "").trim());
     return;
   }
   if (!rec || rec.agent.slackId !== ev.user || rec.status === "saved") {
@@ -169,7 +170,8 @@ async function onMessage(ev) {
 
 // "test" in the DM: run a check-in now for the sender's latest appointment
 // from the past week, so the flow can be tried without waiting for the scan.
-async function testCheckin(ev) {
+// "test <lead name | FUB link | person id>" picks that lead (past 30 days).
+async function testCheckin(ev, which) {
   const reply = (text) => slack("chat.postMessage", { channel: ev.channel, text });
   const email = (await slackGet("users.info", { user: ev.user })).user.profile.email;
   const users = await fubList("/users?limit=100", "users");
@@ -177,13 +179,25 @@ async function testCheckin(ev) {
   if (!me) return reply(`I couldn't find a FUB user with ${email}.`);
   const now = Date.now();
   const appts = await fubList(
-    `/appointments?userId=${me.id}&start=${encodeURIComponent(new Date(now - 7 * 864e5).toISOString())}&end=${encodeURIComponent(new Date(now).toISOString())}&limit=100`,
+    `/appointments?userId=${me.id}&start=${encodeURIComponent(new Date(now - (which ? 30 : 7) * 864e5).toISOString())}&end=${encodeURIComponent(new Date(now).toISOString())}&limit=100`,
     "appointments"
   );
   const past = appts
     .filter((a) => Date.parse(a.end || a.start) <= now && (a.invitees || []).some((i) => i.personId))
     .sort((a, b) => Date.parse(b.start) - Date.parse(a.start));
-  if (!past.length) return reply("You have no appointments with a lead in FUB in the past 7 days, so there's nothing to test with.");
-  const ok = await askAboutAppointment(past[0], { agentUserId: me.id });
+  const id = Number((which.match(/(\d{3,})\/?$/) || [])[1]);
+  const pick = !which
+    ? past
+    : past.filter((a) =>
+        (a.invitees || []).some((i) => i.personId && (i.personId === id || String(i.name || "").toLowerCase().includes(which.toLowerCase())))
+      );
+  if (!pick.length) {
+    return reply(
+      which
+        ? `I couldn't find a past appointment of yours with "${which}" in the last 30 days.`
+        : "You have no appointments with a lead in FUB in the past 7 days, so there's nothing to test with."
+    );
+  }
+  const ok = await askAboutAppointment(pick[0], { agentUserId: me.id });
   if (!ok) await reply("I found your appointment but couldn't start the check-in (no lead or no Slack match).");
 }

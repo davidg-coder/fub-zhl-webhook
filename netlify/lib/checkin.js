@@ -183,7 +183,7 @@ async function askAboutAppointment(appt, { agentUserId, log = console.log } = {}
         type: "actions",
         block_id: `outcome:${appt.id}`,
         elements: [
-          ...(outcomes.length ? outcomes.slice(0, 4) : FALLBACK_OUTCOMES.map((name, i) => ({ id: `x${i}`, name }))).map((o) => ({
+          ...(outcomes.length ? outcomes.slice(0, 10) : FALLBACK_OUTCOMES.map((name, i) => ({ id: `x${i}`, name }))).map((o) => ({
             type: "button",
             text: { type: "plain_text", text: o.name.slice(0, 70) },
             action_id: `outcome:${o.id}`,
