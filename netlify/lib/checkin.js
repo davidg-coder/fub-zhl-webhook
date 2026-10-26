@@ -112,6 +112,7 @@ async function fubOutcomes() {
 
 // Shown when FUB has no outcomes set up; the choice only goes to Claude.
 const FALLBACK_OUTCOMES = ["Met", "No-show", "Rescheduled", "Cancelled"];
+const NOT_MET = /no.?show|not met|didn.?t|resched|cancel/i;
 
 const fmtTime = (iso) =>
   new Date(iso).toLocaleString("en-US", { timeZone: TZ, weekday: "short", hour: "numeric", minute: "2-digit" });
@@ -157,6 +158,11 @@ async function askAboutAppointment(appt, { agentUserId, log = console.log } = {}
     ? agents.find((a) => a.userId === agentUserId)
     : agents.find((a) => a.userId === person.assignedUserId) || agents[0];
   if (!agentInv || (!agentUserId && !inPilot(agentInv.userId))) return false;
+  // InterFace recruiting appointments often have no type; the lead's stage tells.
+  if (!agentUserId && SKIP_TYPES.test(person.stage || "")) {
+    await store.setJSON(`appt/${appt.id}`, { status: "skipped_recruiting", at: Date.now() });
+    return false;
+  }
   const agent = await slackUserFor(agentInv.userId);
   if (!agent) {
     await store.setJSON(`appt/${appt.id}`, { status: "no_slack", at: Date.now() });
@@ -165,6 +171,9 @@ async function askAboutAppointment(appt, { agentUserId, log = console.log } = {}
 
   const leadName = person.name || leadInv.name || `Lead #${leadInv.personId}`;
   const outcomes = await fubOutcomes();
+  let buttons = outcomes.length ? outcomes.slice(0, 10) : FALLBACK_OUTCOMES.map((name, i) => ({ id: `x${i}`, name }));
+  // Always offer a way to say it didn't happen, even if FUB's outcomes are all "Met".
+  if (!buttons.some((o) => NOT_MET.test(o.name))) buttons = [...buttons.slice(0, 9), { id: "notmet", name: "Didn't happen / Reschedule" }];
   const dm = await slack("conversations.open", { users: agent.slackId });
   const channel = dm.channel.id;
   const what = appt.type ? `*${appt.type}*` : "appointment";
@@ -183,7 +192,7 @@ async function askAboutAppointment(appt, { agentUserId, log = console.log } = {}
         type: "actions",
         block_id: `outcome:${appt.id}`,
         elements: [
-          ...(outcomes.length ? outcomes.slice(0, 10) : FALLBACK_OUTCOMES.map((name, i) => ({ id: `x${i}`, name }))).map((o) => ({
+          ...buttons.map((o) => ({
             type: "button",
             text: { type: "plain_text", text: o.name.slice(0, 70) },
             action_id: `outcome:${o.id}`,
@@ -273,6 +282,7 @@ const PLAN_PROMPT = `You are Claudio, the assistant for Power Real Estate Group 
 
 - Ask at most one short follow-up question at a time, and only for what's missing: how it went (outcome) and the next step. After two follow-ups, or if the agent says that's all, set ready=true with what you have.
 - Never invent facts. The note uses only what the agent said, written in third person ("Agent reports…").
+- If the appointment didn't happen (no-show, cancelled, rescheduled): outcomeId is the matching outcome if one exists, else null; stage stays null (no change); the note says it didn't happen and why, in the agent's words; the task is to reschedule (or the new date if they gave one).
 - stage: only when the answer clearly moves the lead (e.g. signed a listing or buyer agreement, wrote an offer, lost/not interested). Must be an exact name from the stage list. Otherwise null.
 - task: the agent's next step with a realistic due date (default 2 business days if they gave none). null if there's no next step.
 - reply: friendly, plain, at most 2 sentences, in the language the agent wrote in. When ready, just say you've drafted it and they can tap Save or reply with changes; the plan itself is shown separately.`;
