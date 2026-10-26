@@ -73,7 +73,7 @@ async function onAction(payload) {
   const rec = await load(value.appt);
   if (!rec || rec.agent.slackId !== payload.user.id) return;
 
-  if (action.action_id.startsWith("outcome:")) {
+  if (/^(outcome|stage):/.test(action.action_id)) {
     if (rec.status === "saved") return;
     const picked = action.text.text;
     // Swap the buttons for the choice so it can't be tapped twice.
@@ -86,7 +86,7 @@ async function onAction(payload) {
         { type: "context", elements: [{ type: "mrkdwn", text: `You picked *${picked}* · <${FUB_APP}/2/people/view/${rec.person.id}|Open in FUB>` }] },
       ],
     });
-    rec.transcript.push({ from: "Agent", text: `Outcome: ${picked}` });
+    rec.transcript.push({ from: "Agent", text: `${action.action_id.startsWith("stage:") ? "Picked stage" : "Outcome"}: ${picked}` });
     await respond(rec);
     return;
   }

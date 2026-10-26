@@ -110,9 +110,23 @@ async function fubOutcomes() {
   return outcomes;
 }
 
-// Shown when FUB has no outcomes set up; the choice only goes to Claude.
-const FALLBACK_OUTCOMES = ["Met", "No-show", "Rescheduled", "Cancelled"];
 const NOT_MET = /no.?show|not met|didn.?t|resched|cancel/i;
+
+// Stages a check-in may move a sales lead to, in pipeline order. Power and
+// Zillow leads share the same sales stages (all synced with Zillow); recruiting
+// stages are a separate pipeline. After an appointment a lead only moves
+// forward, so the earlier stages (Lead … Appointment Set) and Closed/Trash
+// are left out.
+const CHECKIN_STAGES = [
+  "met with customer", "showing homes", "submitting offers", "listing agreement",
+  "under contract", "active listing", "nurture",
+];
+
+// FUB's spelling of those stages, in the order above.
+async function checkinStages() {
+  const names = (await fubList("/stages?limit=100", "stages")).map((s) => s.name);
+  return CHECKIN_STAGES.map((want) => names.find((n) => n.trim().toLowerCase() === want)).filter(Boolean);
+}
 
 const fmtTime = (iso) =>
   new Date(iso).toLocaleString("en-US", { timeZone: TZ, weekday: "short", hour: "numeric", minute: "2-digit" });
@@ -170,10 +184,15 @@ async function askAboutAppointment(appt, { agentUserId, log = console.log } = {}
   }
 
   const leadName = person.name || leadInv.name || `Lead #${leadInv.personId}`;
-  const outcomes = await fubOutcomes();
-  let buttons = outcomes.length ? outcomes.slice(0, 10) : FALLBACK_OUTCOMES.map((name, i) => ({ id: `x${i}`, name }));
-  // Always offer a way to say it didn't happen, even if FUB's outcomes are all "Met".
-  if (!buttons.some((o) => NOT_MET.test(o.name))) buttons = [...buttons.slice(0, 9), { id: "notmet", name: "Didn't happen / Reschedule" }];
+  // Buttons: where the lead stands now (sales stages from Met with customer
+  // up), plus FUB's "didn't happen" outcomes (Rescheduled, Canceled/No Show).
+  const [stages, outcomes] = await Promise.all([checkinStages(), fubOutcomes()]);
+  let notMet = outcomes.filter((o) => NOT_MET.test(o.name));
+  if (!notMet.length) notMet = [{ id: "notmet", name: "Didn't happen / Reschedule" }];
+  const buttons = [
+    ...stages.map((name, i) => ({ actionId: `stage:${i}`, name })),
+    ...notMet.map((o) => ({ actionId: `outcome:${o.id}`, name: o.name })),
+  ];
   const dm = await slack("conversations.open", { users: agent.slackId });
   const channel = dm.channel.id;
   const what = appt.type ? `*${appt.type}*` : "appointment";
@@ -195,7 +214,7 @@ async function askAboutAppointment(appt, { agentUserId, log = console.log } = {}
           ...buttons.map((o) => ({
             type: "button",
             text: { type: "plain_text", text: o.name.slice(0, 70) },
-            action_id: `outcome:${o.id}`,
+            action_id: o.actionId,
             value: JSON.stringify({ appt: appt.id }),
           })),
           { type: "button", text: { type: "plain_text", text: "Open in FUB" }, url: `${FUB_APP}/2/people/view/${person.id}`, action_id: "open_fub" },
@@ -282,27 +301,18 @@ const PLAN_PROMPT = `You are Claudio, the assistant for Power Real Estate Group 
 
 - Ask at most one short follow-up question at a time, and only for what's missing: how it went (outcome) and the next step. After two follow-ups, or if the agent says that's all, set ready=true with what you have.
 - Never invent facts. The note uses only what the agent said, written in third person ("Agent reports…").
+- outcomeId is only for an appointment that didn't happen; if it happened, outcomeId is null.
+- If the agent tapped a stage ("Picked stage: …"), the appointment happened and that's the stage unless they say otherwise.
 - If the appointment didn't happen (no-show, cancelled, rescheduled): outcomeId is the matching outcome if one exists, else null; stage stays null (no change); the note says it didn't happen and why, in the agent's words; the task is to reschedule (or the new date if they gave one).
 - stage: only when the answer clearly moves the lead forward, and only to an exact name from the stage list: met and still working it → Met with customer; out looking at homes → Showing Homes; writing offers → Submitting Offers; signed a listing → Listing agreement; in escrow → Under Contract; listing is live → Active Listing; not ready / long-term → Nurture. Otherwise null.
 - task: the agent's next step with a realistic due date (default 2 business days if they gave none). null if there's no next step.
 - reply: friendly, plain, at most 2 sentences, in the language the agent wrote in. When ready, just say you've drafted it and they can tap Save or reply with changes; the plan itself is shown separately.`;
 
-// Stages a check-in may move a sales lead to. Power and Zillow leads share the
-// same sales stages (all synced with Zillow); recruiting stages are a separate
-// pipeline. After an appointment a lead only moves forward from here, so the
-// earlier stages (Lead … Appointment Set) and Closed/Trash are left out.
-const CHECKIN_STAGES = [
-  "met with customer", "showing homes", "submitting offers", "listing agreement",
-  "under contract", "active listing", "nurture",
-];
-
 async function draftPlan(rec) {
-  const [outcomes, stages] = await Promise.all([
-    fubOutcomes(),
-    fubList("/stages?limit=100", "stages").then((list) =>
-      list.map((s) => s.name).filter((n) => CHECKIN_STAGES.includes(n.trim().toLowerCase()))
-    ),
-  ]);
+  const [allOutcomes, stages] = await Promise.all([fubOutcomes(), checkinStages()]);
+  // The "Met- …" outcomes add nothing over the stage, so only a didn't-happen
+  // outcome is ever logged on the appointment.
+  const outcomes = allOutcomes.filter((o) => NOT_MET.test(o.name));
   const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
   const context = {
     today,
