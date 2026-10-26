@@ -439,8 +439,10 @@ async function draftPlan(rec) {
   if (pickAt >= 0) {
     const picked = rec.transcript[pickAt].text.replace(/^Picked stage: /, "");
     const later = rec.transcript.slice(pickAt + 1).filter((m) => m.from === "Agent").map((m) => m.text.toLowerCase()).join(" ");
-    const named = stages.some((s) => s !== picked && later.includes(s.toLowerCase()));
-    if (stages.includes(picked) && !named) plan.stage = picked;
+    // "showing homes next weekend" names a stage by accident, so it only counts
+    // as a change when they also say stage/move/change/put/set.
+    const asked = /\b(stage|move|change|put|set|update)\b/.test(later) && stages.some((s) => s !== picked && later.includes(s.toLowerCase()));
+    if (stages.includes(picked) && !(asked && plan.stage)) plan.stage = picked;
   }
   if (plan.stage === rec.person.stage) plan.stage = null;
   plan.outcomeName = (outcomes.find((o) => o.id === plan.outcomeId) || {}).name || null;
