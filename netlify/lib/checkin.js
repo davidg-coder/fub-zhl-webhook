@@ -350,30 +350,43 @@ function planBlocks(rec, plan, planId) {
 async function applyPlan(rec) {
   const { plan } = rec;
   const personId = rec.person.id;
-  const done = [];
-  if (plan.note) {
+  // Steps already saved stay in rec.saved, so tapping Save again after a
+  // failure finishes the rest without duplicating the note or task.
+  const done = (rec.saved = rec.saved || []);
+  if (plan.note && !done.includes("note")) {
     // The full Slack exchange goes in too, so the record lives in FUB and not
     // only in a DM nobody else can see.
-    const convo = rec.transcript.map((t) => `${t.from === "Agent" ? rec.agent.name : "Claudio"}: ${t.text}`).join("\n");
+    const convo = rec.transcript.map((t) => `${t.from === "Agent" ? rec.agent.name : "Claudio"}: ${t.text}`).join("
+");
     await fub("/notes", {
       method: "POST",
       body: JSON.stringify({
         personId,
         subject: `Appointment recap${rec.appt.type ? ` (${rec.appt.type})` : ""}`,
-        body: `${plan.note}\n\n— logged by ${rec.agent.name} via Claudio\n\nConversation:\n${convo}`,
+        body: `${plan.note}
+
+— logged by ${rec.agent.name} via Claudio
+
+Conversation:
+${convo}`,
       }),
     });
     done.push("note");
   }
-  if (plan.outcomeId) {
-    await fub(`/appointments/${rec.appt.id}`, { method: "PUT", body: JSON.stringify({ outcomeId: plan.outcomeId }) });
+  if (plan.outcomeId && !done.includes("outcome")) {
+    // FUB rejects an appointment update without its start and end.
+    const appt = await fub(`/appointments/${rec.appt.id}`);
+    await fub(`/appointments/${rec.appt.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ title: appt.title, start: appt.start, end: appt.end, outcomeId: plan.outcomeId }),
+    });
     done.push("outcome");
   }
-  if (plan.stage) {
+  if (plan.stage && !done.includes("stage")) {
     await fub(`/people/${personId}`, { method: "PUT", body: JSON.stringify({ stage: plan.stage }) });
     done.push("stage");
   }
-  if (plan.task) {
+  if (plan.task && !done.includes("task")) {
     await fub("/tasks", {
       method: "POST",
       body: JSON.stringify({ personId, assignedUserId: rec.agent.fubUserId, name: plan.task.name, type: plan.task.type, dueDate: plan.task.dueDate }),

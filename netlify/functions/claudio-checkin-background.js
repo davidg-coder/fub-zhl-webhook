@@ -101,12 +101,13 @@ async function onAction(payload) {
       done = await applyPlan(rec);
     } catch (err) {
       console.error(`Check-in: save failed for appointment ${rec.appt.id}:`, err.message);
-      await say(rec, `I couldn't save everything to FUB (${String(err.message).slice(0, 200)}). Nothing else was changed after that; you may want to finish it in FUB.`);
+      await save(rec);
+      const partial = rec.saved && rec.saved.length ? ` Already saved: ${rec.saved.join(", ")}.` : "";
+      await say(rec, `I couldn't save everything to FUB (${String(err.message).slice(0, 200)}).${partial} Tap Save again to retry the rest.`);
       return;
     }
     rec.status = "saved";
     rec.savedAt = Date.now();
-    rec.saved = done;
     await save(rec);
     await checkinStore().delete(`open/${rec.appt.id}`);
     await slack("chat.update", {
