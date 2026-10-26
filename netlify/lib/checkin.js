@@ -475,7 +475,19 @@ async function applyPlan(rec) {
   return done;
 }
 
+// Who the pilot and digest lists resolve to in FUB, for the "pilot" DM.
+async function pilotReport() {
+  const users = await fubList("/users?limit=100", "users");
+  const show = (list) =>
+    list.split(",").map((s) => s.trim()).filter(Boolean).map((w) => {
+      const u = users.find((x) => String(x.id) === w || normName(x.name) === normName(w));
+      return u ? `✅ ${u.name} (FUB ${u.id})` : `❌ "${w}" not found in FUB`;
+    }).join("\n");
+  return `*Check-ins go to:*\n${PILOT.trim().toLowerCase() === "all" ? "everyone" : show(PILOT)}\n\n*Daily digest goes to:*\n${show(DIGEST_TO)}`;
+}
+
 module.exports = {
+  pilotReport,
   checkinStore,
   slack,
   slackGet,

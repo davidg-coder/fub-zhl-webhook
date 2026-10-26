@@ -3,7 +3,7 @@
 // Runs as a background function because drafting the plan calls Claude.
 const crypto = require("crypto");
 const {
-  checkinStore, slack, slackGet, verifySlack, askAboutAppointment, fubList, draftPlan, planBlocks, applyPlan, FUB_APP,
+  checkinStore, slack, slackGet, verifySlack, askAboutAppointment, fubList, draftPlan, planBlocks, applyPlan, pilotReport, FUB_APP,
 } = require("../lib/checkin");
 
 exports.handler = async (event) => {
@@ -149,6 +149,10 @@ async function onMessage(ev) {
   const rec = apptId ? await load(apptId) : null;
   const text = await messageText(ev);
 
+  if (/^pilot$/i.test(text) && !ev.thread_ts) {
+    await slack("chat.postMessage", { channel: ev.channel, text: await pilotReport() });
+    return;
+  }
   const test = text.match(/^(?:test|check-?in)(?:\s+(.*))?$/is);
   if (test && !ev.thread_ts) {
     await testCheckin(ev, (test[1] || "").replace(/[<>]/g, "").trim());
