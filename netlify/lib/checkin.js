@@ -11,6 +11,7 @@
 //   agent/<slackUserId>    the agent's latest open check-in, for replies
 //                          typed outside the thread
 //   slack/<fubUserId>      cached Slack user id for a FUB user
+//   digest/<YYYY-MM-DD>    the managers' daily digest went out that day
 const crypto = require("crypto");
 const { getStore } = require("@netlify/blobs");
 const Anthropic = require("@anthropic-ai/sdk");
@@ -25,11 +26,35 @@ const FUB_APP = "https://power.followupboss.com";
 const checkinStore = () =>
   getStore({ name: "claudio-checkins", siteID: process.env.SITE_ID, token: process.env.NETLIFY_AUTH_TOKEN, consistency: "strong" });
 
-// FUB user ids in the pilot ("all" = everyone). Empty means nobody gets pinged.
-function inPilot(userId) {
-  const list = (process.env.CHECKIN_PILOT_USER_IDS || "").trim();
-  if (list.toLowerCase() === "all") return true;
-  return list.split(",").map((s) => Number(s.trim())).includes(Number(userId));
+// Who gets check-ins: FUB user names or ids, comma-separated ("all" = everyone).
+// CHECKIN_PILOT overrides the default pilot group.
+const PILOT = process.env.CHECKIN_PILOT || "Diego Clavel, Ruben Aguila, George Hernandez, Stephanie Haines, Jeffery Mcgonigle";
+// Managers who get the daily list of unanswered check-ins.
+const DIGEST_TO = process.env.CHECKIN_DIGEST_TO || "David Gómez, Jeffery Mcgonigle";
+
+const normName = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
+
+// FUB user ids for a comma-separated list of names or ids; logs names with no match.
+async function resolveUsers(list) {
+  const wanted = list.split(",").map((s) => s.trim()).filter(Boolean);
+  const users = wanted.every((w) => /^\d+$/.test(w)) ? [] : await fubList("/users?limit=100", "users");
+  const ids = [];
+  for (const w of wanted) {
+    if (/^\d+$/.test(w)) ids.push(Number(w));
+    else {
+      const u = users.find((x) => normName(x.name) === normName(w));
+      if (u) ids.push(u.id);
+      else console.warn(`Check-in: no FUB user named "${w}"`);
+    }
+  }
+  return ids;
+}
+
+let pilotIds;
+async function inPilot(userId) {
+  if (PILOT.trim().toLowerCase() === "all") return true;
+  pilotIds = pilotIds || resolveUsers(PILOT);
+  return (await pilotIds).includes(Number(userId));
 }
 
 // ---------- Slack ----------
@@ -154,6 +179,7 @@ async function scanAndAsk({ now = Date.now(), log = console.log } = {}) {
   }
   log(`Check-in scan: ${appts.length} appointments in window, ${asked} agents asked`);
   await remindOpen({ now, log });
+  await sendDigest({ now, log });
 }
 
 // Returns true when a DM went out. `agentUserId` (the "test" DM) asks that
@@ -164,14 +190,14 @@ async function askAboutAppointment(appt, { agentUserId, log = console.log } = {}
   const leadInv = invitees.find((i) => i.personId);
   const agents = invitees.filter((i) => i.userId);
   if (!leadInv || !agents.length) return false;
-  if (!agentUserId && !agents.some((a) => inPilot(a.userId))) return false;
+  if (!agentUserId && !(await Promise.all(agents.map((a) => inPilot(a.userId)))).some(Boolean)) return false;
 
   const person = await fub(`/people/${leadInv.personId}`);
   // Ask the lead's own agent when they're on the invite; otherwise the first agent.
   const agentInv = agentUserId
     ? agents.find((a) => a.userId === agentUserId)
     : agents.find((a) => a.userId === person.assignedUserId) || agents[0];
-  if (!agentInv || (!agentUserId && !inPilot(agentInv.userId))) return false;
+  if (!agentInv || (!agentUserId && !(await inPilot(agentInv.userId)))) return false;
   // InterFace recruiting appointments often have no type; the lead's stage tells.
   if (!agentUserId && SKIP_TYPES.test(person.stage || "")) {
     await store.setJSON(`appt/${appt.id}`, { status: "skipped_recruiting", at: Date.now() });
@@ -270,6 +296,44 @@ async function remindOpen({ now = Date.now(), log = console.log } = {}) {
     await store.setJSON(`appt/${id}`, { ...rec, remindedAt: now });
     log(`Check-in: reminded ${rec.agent.name} about appointment ${id}`);
   }
+}
+
+// Daily at 6 PM PT: DM the managers every check-in still waiting on an agent
+// (no answer, mid-conversation, or drafted but never saved), by agent.
+// Skipped on days with nothing pending.
+async function sendDigest({ now = Date.now(), log = console.log } = {}) {
+  const hour = Number(new Date(now).toLocaleString("en-US", { timeZone: TZ, hour: "numeric", hour12: false }));
+  if (hour !== 18) return;
+  const store = checkinStore();
+  const day = new Date(now).toLocaleDateString("en-CA", { timeZone: TZ });
+  if (await store.get(`digest/${day}`)) return;
+  await store.set(`digest/${day}`, String(now));
+
+  const { blobs } = await store.list({ prefix: "open/" });
+  const byAgent = {};
+  for (const { key } of blobs) {
+    const rec = await store.get(`appt/${key.slice(5)}`, { type: "json" });
+    if (!rec || rec.status === "saved" || !rec.agent) continue;
+    const state = rec.status === "planned" ? "drafted, not saved" : rec.transcript.length ? "started, not finished" : "no answer";
+    const hours = Math.round((now - rec.askedAt) / 3600e3);
+    (byAgent[rec.agent.name] = byAgent[rec.agent.name] || []).push(
+      `• <${FUB_APP}/2/people/view/${rec.person.id}|${rec.person.name}> (appt ${fmtTime(rec.appt.start)}): ${state}, asked ${hours < 24 ? `${hours}h` : `${Math.round(hours / 24)}d`} ago`
+    );
+  }
+  const agents = Object.keys(byAgent).sort();
+  if (!agents.length) return log("Check-in digest: nothing pending");
+  const total = agents.reduce((n, a) => n + byAgent[a].length, 0);
+  const text = `📋 *Appointment check-ins still open: ${total}*\nThese aren't logged in FUB yet.\n\n${agents
+    .map((a) => `*${a}* (${byAgent[a].length})\n${byAgent[a].join("\n")}`)
+    .join("\n\n")}`;
+
+  for (const fubUserId of await resolveUsers(DIGEST_TO)) {
+    const to = await slackUserFor(fubUserId);
+    if (!to) continue;
+    const dm = await slack("conversations.open", { users: to.slackId });
+    await slack("chat.postMessage", { channel: dm.channel.id, text, unfurl_links: false });
+  }
+  log(`Check-in digest: ${total} open check-ins sent`);
 }
 
 // ---------- Plan: turn the agent's answer into FUB updates ----------
