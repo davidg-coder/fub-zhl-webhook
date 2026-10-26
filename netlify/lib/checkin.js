@@ -283,21 +283,24 @@ const PLAN_PROMPT = `You are Claudio, the assistant for Power Real Estate Group 
 - Ask at most one short follow-up question at a time, and only for what's missing: how it went (outcome) and the next step. After two follow-ups, or if the agent says that's all, set ready=true with what you have.
 - Never invent facts. The note uses only what the agent said, written in third person ("Agent reports…").
 - If the appointment didn't happen (no-show, cancelled, rescheduled): outcomeId is the matching outcome if one exists, else null; stage stays null (no change); the note says it didn't happen and why, in the agent's words; the task is to reschedule (or the new date if they gave one).
-- stage: only when the answer clearly moves the lead (e.g. signed a listing or buyer agreement, wrote an offer, lost/not interested). Must be an exact name from the stage list. Otherwise null.
+- stage: only when the answer clearly moves the lead forward, and only to an exact name from the stage list: met and still working it → Met with customer; out looking at homes → Showing Homes; writing offers → Submitting Offers; signed a listing → Listing agreement; in escrow → Under Contract; listing is live → Active Listing; not ready / long-term → Nurture. Otherwise null.
 - task: the agent's next step with a realistic due date (default 2 business days if they gave none). null if there's no next step.
 - reply: friendly, plain, at most 2 sentences, in the language the agent wrote in. When ready, just say you've drafted it and they can tap Save or reply with changes; the plan itself is shown separately.`;
 
-// Recruiting stages ("Recruiting - …", also the "Recruting-" typo) are their own
-// pipeline; sales leads (Power and Zillow share the same stages) never move
-// into them. Claudio also never closes or trashes a lead.
-const RECRUITING_STAGE = /^recru?i?t/i;
-const PROTECTED_STAGES = /^(closed|trash)$/i;
+// Stages a check-in may move a sales lead to. Power and Zillow leads share the
+// same sales stages (all synced with Zillow); recruiting stages are a separate
+// pipeline. After an appointment a lead only moves forward from here, so the
+// earlier stages (Lead … Appointment Set) and Closed/Trash are left out.
+const CHECKIN_STAGES = [
+  "met with customer", "showing homes", "submitting offers", "listing agreement",
+  "under contract", "active listing", "nurture",
+];
 
 async function draftPlan(rec) {
   const [outcomes, stages] = await Promise.all([
     fubOutcomes(),
     fubList("/stages?limit=100", "stages").then((list) =>
-      list.map((s) => s.name).filter((n) => !RECRUITING_STAGE.test(n) && !PROTECTED_STAGES.test(n))
+      list.map((s) => s.name).filter((n) => CHECKIN_STAGES.includes(n.trim().toLowerCase()))
     ),
   ]);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
