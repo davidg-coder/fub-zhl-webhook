@@ -391,7 +391,7 @@ const PLAN_PROMPT = `You are Claudio, the assistant for Power Real Estate Group 
 - appointment: when the next step is meeting the lead at a set time (a showing, a listing appointment, another meeting or call with them), it goes on the FUB calendar, so you need the exact day and start time. If the agent was vague ("next weekend", "Saturday", "in the afternoon"), ask for the exact day and time before setting ready (for a showing, also the area or address if they didn't say). Work out dates like "this Saturday" from today. Never guess a day or time. If the agent doesn't know yet, appointment is null and the task is to schedule it. Pick typeId from the appointment types when one clearly fits. Don't add a task for the same thing as the appointment.
 - Never invent facts. The note uses only what the agent said, written in third person ("Agent reports…").
 - outcomeId is only for an appointment that didn't happen; if it happened, outcomeId is null.
-- If the agent tapped a stage ("Picked stage: …"), the appointment happened and that's the stage unless they say otherwise.
+- If the agent tapped a stage ("Picked stage: …"), the appointment happened and that's the stage unless they explicitly ask for a different one. A showing that is only planned doesn't make it Showing Homes.
 - If the appointment didn't happen (no-show, cancelled, rescheduled): outcomeId is the matching outcome if one exists, else null; stage stays null (no change); the note says it didn't happen and why, in the agent's words; the task is to reschedule (or the new date if they gave one).
 - stage: only when the answer clearly moves the lead forward, and only to an exact name from the stage list: met and still working it → Met with customer; out looking at homes → Showing Homes; writing offers → Submitting Offers; signed a listing → Listing agreement; in escrow → Under Contract; listing is live → Active Listing; not ready / long-term → Nurture. Otherwise null.
 - task: the agent's next step with a realistic due date (default 2 business days if they gave none). null if there's no next step.
@@ -433,6 +433,15 @@ async function draftPlan(rec) {
   const plan = JSON.parse(text);
   if (plan.outcomeId != null && !outcomes.some((o) => o.id === plan.outcomeId)) plan.outcomeId = null;
   if (plan.stage && !stages.includes(plan.stage)) plan.stage = null;
+  // A stage the agent tapped wins, unless they later named a different stage
+  // themselves. Upcoming showings don't move the lead to Showing Homes.
+  const pickAt = rec.transcript.map((m) => m.from === "Agent" && /^Picked stage: /.test(m.text)).lastIndexOf(true);
+  if (pickAt >= 0) {
+    const picked = rec.transcript[pickAt].text.replace(/^Picked stage: /, "");
+    const later = rec.transcript.slice(pickAt + 1).filter((m) => m.from === "Agent").map((m) => m.text.toLowerCase()).join(" ");
+    const named = stages.some((s) => s !== picked && later.includes(s.toLowerCase()));
+    if (stages.includes(picked) && !named) plan.stage = picked;
+  }
   if (plan.stage === rec.person.stage) plan.stage = null;
   plan.outcomeName = (outcomes.find((o) => o.id === plan.outcomeId) || {}).name || null;
   const a = plan.appointment;
