@@ -224,13 +224,13 @@ async function askAboutAppointment(appt, { agentUserId, log = console.log } = {}
   const what = appt.type ? `*${appt.type}*` : "appointment";
   const msg = await slack("chat.postMessage", {
     channel,
-    text: `How did your appointment with ${leadName} go?`,
+    text: `<@${agent.slackId}> How did your appointment with ${leadName} go?`,
     blocks: [
       {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `👋 Hi ${agent.firstName}! How did your ${what} with *${leadName}* go? (${fmtTime(appt.start)})\nTap one, or just reply here in your own words (or a voice clip): how it went and what's next.`,
+          text: `👋 Hi <@${agent.slackId}>! How did your ${what} with *${leadName}* go? (${fmtTime(appt.start)})\nTap one, or just reply here in your own words (or a voice clip): how it went and what's next.`,
         },
       },
       {
@@ -291,7 +291,7 @@ async function remindOpen({ now = Date.now(), log = console.log } = {}) {
     await slack("chat.postMessage", {
       channel: rec.channel,
       thread_ts: rec.ts,
-      text: `Quick reminder: how did it go with *${rec.person.name}*? A one-line answer is plenty, I'll log it in FUB for you.`,
+      text: `<@${rec.agent.slackId}> Quick reminder: how did it go with *${rec.person.name}*? A one-line answer is plenty, I'll log it in FUB for you.`,
     });
     await store.setJSON(`appt/${id}`, { ...rec, remindedAt: now });
     log(`Check-in: reminded ${rec.agent.name} about appointment ${id}`);
