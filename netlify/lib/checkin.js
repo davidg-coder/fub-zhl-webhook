@@ -100,6 +100,19 @@ async function fubList(path, key) {
   return out;
 }
 
+// FUB's appointment outcomes. The list key isn't consistently cased across FUB
+// endpoints, so take whichever array the response carries.
+async function fubOutcomes() {
+  const data = await fub("/appointmentOutcomes?limit=100");
+  const list = Object.entries(data).find(([k, v]) => k !== "_metadata" && Array.isArray(v));
+  const outcomes = ((list && list[1]) || []).filter((o) => o && o.id && o.name);
+  if (!outcomes.length) console.warn(`Check-in: no appointment outcomes from FUB (keys: ${Object.keys(data).join(",")})`);
+  return outcomes;
+}
+
+// Shown when FUB has no outcomes set up; the choice only goes to Claude.
+const FALLBACK_OUTCOMES = ["Met", "No-show", "Rescheduled", "Cancelled"];
+
 const fmtTime = (iso) =>
   new Date(iso).toLocaleString("en-US", { timeZone: TZ, weekday: "short", hour: "numeric", minute: "2-digit" });
 
@@ -151,7 +164,7 @@ async function askAboutAppointment(appt, { agentUserId, log = console.log } = {}
   }
 
   const leadName = person.name || leadInv.name || `Lead #${leadInv.personId}`;
-  const outcomes = (await fub("/appointmentOutcomes")).appointmentOutcomes || [];
+  const outcomes = await fubOutcomes();
   const dm = await slack("conversations.open", { users: agent.slackId });
   const channel = dm.channel.id;
   const what = appt.type ? `*${appt.type}*` : "appointment";
@@ -170,11 +183,11 @@ async function askAboutAppointment(appt, { agentUserId, log = console.log } = {}
         type: "actions",
         block_id: `outcome:${appt.id}`,
         elements: [
-          ...outcomes.slice(0, 4).map((o) => ({
+          ...(outcomes.length ? outcomes.slice(0, 4) : FALLBACK_OUTCOMES.map((name, i) => ({ id: `x${i}`, name }))).map((o) => ({
             type: "button",
             text: { type: "plain_text", text: o.name.slice(0, 70) },
             action_id: `outcome:${o.id}`,
-            value: JSON.stringify({ appt: appt.id, outcomeId: o.id }),
+            value: JSON.stringify({ appt: appt.id }),
           })),
           { type: "button", text: { type: "plain_text", text: "Open in FUB" }, url: `${FUB_APP}/2/people/view/${person.id}`, action_id: "open_fub" },
         ],
@@ -266,7 +279,7 @@ const PLAN_PROMPT = `You are Claudio, the assistant for Power Real Estate Group 
 
 async function draftPlan(rec) {
   const [outcomes, stages] = await Promise.all([
-    fub("/appointmentOutcomes").then((d) => d.appointmentOutcomes || []),
+    fubOutcomes(),
     fub("/stages?limit=100").then((d) => (d.stages || []).map((s) => s.name)),
   ]);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
