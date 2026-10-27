@@ -346,6 +346,47 @@ async function countSince(path, key, since, keep) {
   return { n, capped };
 }
 
+// FUB /calls has no userId filter (the team logs ~3,700 calls a day), so an
+// agent's calls are counted by their FUB calling numbers instead. The numbers
+// are learned from the calls on their most recently active leads.
+async function agentCallNumbers(agentId) {
+  const people = (await fub(`/people?assignedUserId=${agentId}&sort=-lastActivity&limit=10&fields=id,assignedPondId`)).people || [];
+  const numbers = new Set();
+  for (const p of people.filter((x) => !x.assignedPondId).slice(0, 8)) {
+    const calls = (await fub(`/calls?personId=${p.id}&limit=25`)).calls || [];
+    for (const c of calls) {
+      if (c.userId !== agentId) continue;
+      const n = String((c.isIncoming ? c.toNumber : c.fromNumber) || "").replace(/\D/g, "").slice(-10);
+      if (n.length === 10) numbers.add(n);
+    }
+    if (numbers.size >= 3) break;
+  }
+  return [...numbers];
+}
+
+// Calls on one number since `since`. Trusts FUB's total when the first page is
+// all this agent's; otherwise counts page by page (shared number).
+async function callsOnNumber(param, number, agentId, since) {
+  const data = await fub(`/calls?${param}=${number}&createdAfter=${encodeURIComponent(since)}&limit=100`);
+  const rows = data.calls || [];
+  const total = (data._metadata && data._metadata.total) || rows.length;
+  if (rows.every((c) => c.userId === agentId)) return { n: total, capped: false };
+  return countSince(`/calls?${param}=${number}&createdAfter=${encodeURIComponent(since)}&limit=100`, "calls", since, (c) => c.userId === agentId);
+}
+
+async function countCalls(agentId, since) {
+  const numbers = await agentCallNumbers(agentId);
+  if (!numbers.length) return { outgoing: 0, incoming: 0, capped: false, numbersFound: 0 };
+  let outgoing = 0, incoming = 0, capped = false;
+  for (const n of numbers) {
+    const [o, i] = await Promise.all([callsOnNumber("fromNumber", n, agentId, since), callsOnNumber("toNumber", n, agentId, since)]);
+    outgoing += o.n;
+    incoming += i.n;
+    capped = capped || o.capped || i.capped;
+  }
+  return { outgoing, incoming, capped, numbersFound: numbers.length };
+}
+
 async function getMyNumbers(input, user) {
   if (!user || !user.id) return { text: "Can't tell who is signed in, so I can't read numbers right now.", isError: true };
   const isAdmin = /broker|admin|owner/i.test(user.role || "") || user.portalRole === "admin";
@@ -362,15 +403,27 @@ async function getMyNumbers(input, user) {
   const since = new Date(Date.now() - days * 864e5).toISOString();
   const now = new Date().toISOString();
 
-  const total = (q) => fub(`/people?assignedUserId=${agent.id}&limit=1&fields=id${q}`).then((d) => (d._metadata && d._metadata.total) || 0).catch(() => null);
+  // Leads sitting in a pond keep the pond owner as assignedUserId, so a pond
+  // owner's per-stage totals subtract the leads in the ponds they own.
+  const ownedPonds = ((await fub("/ponds?limit=100").catch(() => ({}))).ponds || []).filter((p) => p.userId === agent.id);
+  const totalOf = (q) => fub(`/people?limit=1&fields=id${q}`).then((d) => (d._metadata && d._metadata.total) || 0);
+  const stageCount = async (st) => {
+    const stage = `&stage=${encodeURIComponent(st)}`;
+    const [all, ...inPonds] = await Promise.all([
+      totalOf(`&assignedUserId=${agent.id}${stage}`),
+      ...ownedPonds.map((p) => totalOf(`&assignedPondId=${p.id}${stage}`)),
+    ]);
+    return Math.max(all - inPonds.reduce((a, b) => a + b, 0), 0);
+  };
   const [pipeline, newLeads, appts, calls] = await Promise.all([
-    Promise.all(PIPELINE_STAGES.map((st) => total(`&stage=${encodeURIComponent(st)}`))),
-    countSince(`/people?assignedUserId=${agent.id}&sort=-created&limit=100&fields=id,created,assignedUserId`, "people", since, (p) => p.assignedUserId === agent.id).catch(() => null),
+    Promise.all(PIPELINE_STAGES.map((st) => stageCount(st).catch(() => null))),
+    countSince(`/people?assignedUserId=${agent.id}&sort=-created&limit=100&fields=id,created,assignedUserId,assignedPondId`, "people", since, (p) => p.assignedUserId === agent.id && !p.assignedPondId).catch(() => null),
     fub(`/appointments?userId=${agent.id}&start=${encodeURIComponent(since)}&end=${encodeURIComponent(now)}&limit=100`)
       .then((d) => (d.appointments || []).filter((a) => (a.invitees || []).some((i) => i.userId === agent.id)))
       .catch(() => null),
-    countSince(`/calls?userId=${agent.id}&sort=-created&limit=100`, "calls", since, (c) => c.userId === agent.id).catch(() => null),
+    countCalls(agent.id, since).catch(() => null),
   ]);
+  const plus = (n) => (calls && calls.capped ? `${n}+` : n);
   const out = {
     agent: agent.name,
     windowDays: days,
@@ -380,9 +433,13 @@ async function getMyNumbers(input, user) {
       total: appts.length,
       byType: appts.reduce((m, a) => ({ ...m, [a.type || a.title || "Other"]: (m[a.type || a.title || "Other"] || 0) + 1 }), {}),
     },
-    calls: calls && (calls.capped ? `${calls.n}+` : calls.n),
+    calls: calls && {
+      outgoing: plus(calls.outgoing),
+      incoming: plus(calls.incoming),
+      note: calls.numbersFound ? "Calls made or received on the agent's FUB calling number(s); calls logged by hand aren't included." : "No FUB calling number found on the agent's recent leads, so calls can't be counted.",
+    },
   };
-  console.log(`Claudio skill get_my_numbers user=${user.id} agent=${agent.id} days=${days}`);
+  console.log(`Claudio skill get_my_numbers user=${user.id} agent=${agent.id} days=${days} ponds=${ownedPonds.length} callNumbers=${calls && calls.numbersFound}`);
   return { text: JSON.stringify(out), isError: false };
 }
 
