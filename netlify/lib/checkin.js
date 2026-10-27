@@ -29,7 +29,7 @@ const checkinStore = () =>
 
 // Who gets check-ins: FUB user names or ids, comma-separated ("all" = everyone).
 // CHECKIN_PILOT overrides the default pilot group.
-const PILOT = process.env.CHECKIN_PILOT || 
+const PILOT = process.env.CHECKIN_PILOT ||
   "Diego Clavel, Ruben Aguila, George Hernandez, Stephanie Haines, Jeffery Mcgonigle, Zurielle Herndon, Abraham Marin, Jason Masler, Brandon Pacheco, Sulki Bae";
 // Managers who get the daily list of unanswered check-ins.
 const DIGEST_TO =
