@@ -2,7 +2,8 @@
 // calls this directly: the Portal's own edge function checks the agent's
 // Portal sign-in, then calls here server to server with the shared secret
 // CLAUDIO_PORTAL_SECRET plus who is asking (FUB user id + Portal role) and
-// whatever plan/performance data the Portal has for them.
+// the Portal data for the profile they're looking at. Claudio here only knows
+// the Portal: no FUB tools (see PORTAL_SYSTEM_PROMPT in claudio-ask).
 //
 // Answers reuse claudio-ask-background. The trusted request is saved in
 // portalJobStore first and the background function is only handed the jobId,
@@ -66,6 +67,8 @@ exports.handler = async (event) => {
               role,
               tab: typeof ctx.tab === "string" ? ctx.tab.slice(0, 60) : undefined,
               offices: Array.isArray(ctx.offices) ? ctx.offices.slice(0, 10).map(String) : undefined,
+              viewingAgent: typeof ctx.viewingAgent === "string" ? ctx.viewingAgent.slice(0, 100) : undefined,
+              data: ctx.data || undefined,
               businessPlan: ctx.businessPlan || undefined,
               performance: ctx.performance || undefined,
             },

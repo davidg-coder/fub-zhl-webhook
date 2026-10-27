@@ -59,15 +59,28 @@ Writes (notes, stage changes, tasks, new contacts, appointments, pausing an acti
 The current FUB page is given with each request. "This lead", "him", "her" means the person on that page when there is one.
 If a tool fails or returns nothing, say so plainly. Never guess data.`;
 
-// Added when Claudio runs inside the Power Portal (claudio-portal). There is
-// no FUB sign-in there, so only Claudio's own skills are available.
-const PORTAL_PROMPT = `
+// Claudio inside the Power Portal (claudio-portal) is a separate assistant:
+// it only knows the Portal and the data the Portal sends with each question.
+// No FUB tools, no call lists, no lead actions.
+const PORTAL_SYSTEM_PROMPT = `You are Claudio, the assistant inside the Power Portal, Power Real Estate Group's internal web portal for its agents.
 
-Inside the Power Portal:
-- This request comes from the Power Portal (Power's internal web portal), not FUB. Only Claudio's own tools are available here (get_my_numbers, get_my_call_list, get_pond_call_list, get_lead_details, move_lead_to_pond). For notes, tasks, appointments or texts, point the agent to Claudio in FUB.
-- The answer is shown as text, not read aloud: "display" is the answer (plain text, short lines; it can be a few lines longer than in FUB) and "speech" is a one-sentence summary.
-- Performance and plan questions ("how am I doing", "am I on track for my goal", "how many appointments do I need"): call get_my_numbers and compare with the agent's 2027 Business Plan when the request includes one. Show the math in a line or two (goal, actual so far, pace, gap). If the plan doesn't have the number asked about, say so; never invent goals.
-- Other agents' numbers are for portal role "admin" only (pass agentName to get_my_numbers). Agents and team leads see their own numbers and plan here.`;
+You help agents understand and use what they see in the Portal: their profile, Production, Cap Tracker, Book 1:1, their 2027 Business Plan, and the other Portal pages. Each request includes the agent's role, the page they're on, and the Portal data for the agent profile they're looking at. That data is your only source of facts.
+
+What you do:
+- Explain their numbers in plain words: cap paid vs cap total and what's left, production and how it's trending, how they're doing against their 2027 Business Plan goals and the pace they need.
+- Do simple math on the data they have (remaining, % done, monthly pace, how many deals at their average to reach a goal). Show the math in a line or two.
+- Tell them where things are in the Portal and how to use them (e.g. to book a 1:1, open the Book 1:1 tab).
+- Answer in the language they wrote in (English or Spanish), warm, clear and short.
+
+What you don't do:
+- You are not connected to Follow Up Boss here. Don't offer call lists, lead lookups, notes, tasks, texts or any lead action, and never mention FUB tools. If they ask for that, say this assistant covers the Portal and they can use Claudio inside Follow Up Boss for leads.
+- Never invent numbers, goals or policies. If the data for a question isn't in the request, say you don't see it in their Portal and point them to the page or to their team lead.
+- Agents only see their own data. If someone asks about another agent's numbers and their role isn't admin or team lead, say that's for team leads and admins.
+
+Output:
+- "display" is the answer shown in the chat: plain text, short lines, no markdown symbols. Usually 1 to 6 lines.
+- "speech" is a one or two sentence version that can be read aloud (no tables, no URLs).
+- "items" is always an empty list. "needs_confirmation" is always false.`;
 
 const OUTPUT_SCHEMA = {
   type: "object",
@@ -116,13 +129,17 @@ async function fubTools(mcp) {
 
 function describePage(page = {}, user) {
   const lines = [`Today: ${new Date().toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "long", year: "numeric", month: "long", day: "numeric" })}`];
-  if (user) lines.push(`Signed-in FUB user: ${user.name} (user id ${user.id}, role ${user.role})`);
   if (page.portal) {
     const p = page.portal;
-    lines.push(`Current page: Power Portal${p.tab ? ` (${p.tab} tab)` : ""}. Portal role: ${p.role}${p.offices && p.offices.length ? `, offices: ${p.offices.join(", ")}` : ""}`);
-    if (p.businessPlan) lines.push(`Agent's 2027 Business Plan (from the Portal):\n${JSON.stringify(p.businessPlan).slice(0, 12000)}`);
-    if (p.performance) lines.push(`Performance data shown in the Portal:\n${JSON.stringify(p.performance).slice(0, 6000)}`);
+    lines.push(`Signed in: ${user ? user.name : "unknown"}. Portal role: ${p.role}${p.offices && p.offices.length ? ` (offices: ${p.offices.join(", ")})` : ""}`);
+    lines.push(`Portal page: ${p.tab || "unknown"}${p.viewingAgent ? `, looking at the profile of ${p.viewingAgent}` : ""}`);
+    if (p.data) lines.push(`Portal data for this profile:\n${JSON.stringify(p.data).slice(0, 20000)}`);
+    if (p.businessPlan) lines.push(`2027 Business Plan:\n${JSON.stringify(p.businessPlan).slice(0, 12000)}`);
+    if (p.performance) lines.push(`Performance:\n${JSON.stringify(p.performance).slice(0, 6000)}`);
+    if (!p.data && !p.businessPlan && !p.performance) lines.push("No Portal data was sent with this question.");
+    return lines.join("\n");
   }
+  if (user) lines.push(`Signed-in FUB user: ${user.name} (user id ${user.id}, role ${user.role})`);
   if (page.personId) {
     lines.push(`Current FUB page: person profile, person id ${page.personId}${page.personName ? ` (${page.personName})` : ""}`);
   } else if (page.path) {
@@ -170,7 +187,7 @@ function trimForStorage(messages) {
 // synchronous endpoint and claudio-ask-background (long questions outlive the
 // ~10s sync function limit, so the extension uses the background one).
 // portalUser is passed only by claudio-portal (never read from the request
-// body), after it has verified who is asking; it runs without FUB's MCP tools.
+// body), after it has verified who is asking; it runs with no tools at all.
 async function runAsk(body, portalUser) {
   if (!process.env.ANTHROPIC_API_KEY) return json(500, { error: "ANTHROPIC_API_KEY is not set on Netlify" });
   const { session, conversationId, text, page } = body;
@@ -224,9 +241,9 @@ async function runAsk(body, portalUser) {
       effort: process.env.CLAUDIO_EFFORT || "low",
       format: { type: "json_schema", schema: OUTPUT_SCHEMA },
     },
-    tools: [...tools.defs, ...SKILL_DEFS],
+    ...(portal ? {} : { tools: [...tools.defs, ...SKILL_DEFS] }),
     // Caches the tool definitions + system prompt (tools render before system).
-    system: [{ type: "text", text: portal ? SYSTEM_PROMPT + PORTAL_PROMPT : SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+    system: [{ type: "text", text: portal ? PORTAL_SYSTEM_PROMPT : SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
   };
 
   const trace = [];
@@ -236,7 +253,7 @@ async function runAsk(body, portalUser) {
       const lastRound = round >= MAX_TOOL_ROUNDS;
       response = await client.beta.messages.create({
         ...request,
-        ...(lastRound ? { tool_choice: { type: "none" } } : {}),
+        ...(lastRound && !portal ? { tool_choice: { type: "none" } } : {}),
         messages,
       });
       messages.push({ role: "assistant", content: response.content });
