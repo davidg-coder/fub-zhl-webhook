@@ -14,6 +14,9 @@ const { fub } = require("../lib/claudio-skills");
 
 const SITE = process.env.URL || "https://fub-zhl-webhook.netlify.app";
 const ROLES = new Set(["agent", "team_lead", "admin"]);
+// Who can use Claudio in the Portal: FUB user ids, comma-separated, or "all".
+// CLAUDIO_PORTAL_USERS overrides the default (David 1024, Jeff 177) during the pilot.
+const PORTAL_USERS = (process.env.CLAUDIO_PORTAL_USERS || "1024,177").trim().toLowerCase();
 
 function secretOk(given) {
   const secret = process.env.CLAUDIO_PORTAL_SECRET;
@@ -38,6 +41,11 @@ exports.handler = async (event) => {
   if (!Number.isInteger(fubUserId) || fubUserId <= 0) return json(400, { error: "fubUserId is required" });
   // Jobs and conversations are scoped to the Portal user.
   const session = `portal:${fubUserId}`;
+  const enabled = PORTAL_USERS === "all" || PORTAL_USERS.split(",").map((s) => s.trim()).includes(String(fubUserId));
+
+  // The Portal asks first so it only shows the Claudio button to enabled users.
+  if (body.action === "status") return json(200, { enabled });
+  if (!enabled) return json(403, { error: "not_enabled", display: "Claudio isn't available in the Portal for you yet." });
 
   switch (body.action) {
     case "ask": {
