@@ -33,7 +33,7 @@ const PILOT = process.env.CHECKIN_PILOT || "Diego Clavel, Ruben Aguila, George H
 // Managers who get the daily list of unanswered check-ins.
 const DIGEST_TO =
   process.env.CHECKIN_DIGEST_TO ||
-  "David Gómez, Jeffery Mcgonigle, Zurielle Herndon, Abraham Marin, Jason Masler, Brandon Pacheco";
+  "David Gómez, Jeffery Mcgonigle, Zurielle Herndon, Abraham Marin, Jason Masler, Brandon Pacheco, Sulki Bae";
 
 const normName = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
 
