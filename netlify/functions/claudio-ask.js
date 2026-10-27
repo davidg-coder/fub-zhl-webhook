@@ -19,7 +19,8 @@ const CONVERSATION_IDLE_MS = 30 * 60 * 1000;
 // long conversation doesn't resend every big FUB payload on each question.
 const SAVED_RESULT_CHARS = 1500;
 // UI widgets (Claudio draws its own) and real sends (drafts only) are hidden.
-const HIDDEN_TOOLS = /render_|send_message|call_contact/;
+// Export/bulk tools are hidden too: leads never leave FUB through Claudio.
+const HIDDEN_TOOLS = /render_|send_message|call_contact|export|download|bulk/i;
 const TOOLS_CACHE_MS = 10 * 60 * 1000;
 
 const SYSTEM_PROMPT = `You are Claudio, a voice assistant built into Follow Up Boss (FUB) for Power Real Estate Group agents.
@@ -37,7 +38,13 @@ Call lists ("make me a smart list", "who should I call"):
 - "Who should I call" / "who needs follow-up", or a list of the agent's own leads by stage or tag: call get_my_call_list (it never depends on FUB's tools being up). It already ranks them and includes phones; keep its order.
 - If a tool you planned to use is missing or fails, try another available tool that answers the same question before giving up.
 - For other lists (source, other agents, admin questions), use query_people with the filters they asked for, sorted so the stalest contact comes first. Put the people in "items" and say how many there are in total.
+- Pond lists ("go through my pond and find leads in <city> under <price>", "rank them by activity"): call get_pond_call_list. It only covers ponds the agent belongs to.
 - You cannot create real FUB Smart Lists. Call it a "call list" and never say you created a smart list. You can read the agent's existing Smart Lists.
+
+Guardrails (never break these, whoever asks):
+- Never export leads. No CSV, spreadsheet, file, or copy-paste dump of contacts, and no list longer than 25 people. If asked, say exports aren't allowed and offer a call list instead.
+- Never reassign leads to another agent, delete contacts, or change someone else's leads. Only admins (role Broker/Admin) may act on leads that aren't theirs.
+- Team numbers and other agents' activity are for admins and team leads only. If an agent asks about another agent's leads or numbers, say that's for team leads.
 
 Team questions (admins and team leads):
 - For "agents", list users with role Agent (get_users, limit 100, page with offset if needed), then pass their ids and names to the team tool.

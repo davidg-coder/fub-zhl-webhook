@@ -3,7 +3,7 @@
 // Runs as a background function because drafting the plan calls Claude.
 const crypto = require("crypto");
 const {
-  checkinStore, slack, slackGet, verifySlack, askAboutAppointment, fubList, draftPlan, planBlocks, applyPlan, pilotReport, FUB_APP,
+  checkinStore, slack, slackGet, verifySlack, askAboutAppointment, fubList, draftPlan, planBlocks, applyPlan, pilotReport, sendMorningPlans, FUB_APP,
 } = require("../lib/checkin");
 
 exports.handler = async (event) => {
@@ -151,6 +151,13 @@ async function onMessage(ev) {
 
   if (/^pilot$/i.test(text) && !ev.thread_ts) {
     await slack("chat.postMessage", { channel: ev.channel, text: await pilotReport() });
+    return;
+  }
+  if (/^(plan|my day|morning)$/i.test(text) && !ev.thread_ts) {
+    const email = (await slackGet("users.info", { user: ev.user })).user.profile.email;
+    const me = (await fubList("/users?limit=100", "users")).find((u) => String(u.email || "").toLowerCase() === String(email || "").toLowerCase());
+    if (!me) await slack("chat.postMessage", { channel: ev.channel, text: `I couldn't find a FUB user with ${email}.` });
+    else await sendMorningPlans({ only: me.id });
     return;
   }
   const test = text.match(/^(?:test|check-?in)(?:\s+(.*))?$/is);

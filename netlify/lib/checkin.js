@@ -12,10 +12,11 @@
 //                          typed outside the thread
 //   slack/<fubUserId>      cached Slack user id for a FUB user
 //   digest/<YYYY-MM-DD>    the managers' daily digest went out that day
+//   morning/<YYYY-MM-DD>/<fubUserId>  that agent's morning plan went out
 const crypto = require("crypto");
 const { getStore } = require("@netlify/blobs");
 const Anthropic = require("@anthropic-ai/sdk");
-const { fub } = require("./claudio-skills");
+const { fub, getMyCallList } = require("./claudio-skills");
 
 const MODEL = process.env.CLAUDIO_MODEL || "claude-opus-5-5";
 const TZ = "America/Los_Angeles";
@@ -30,7 +31,9 @@ const checkinStore = () =>
 // CHECKIN_PILOT overrides the default pilot group.
 const PILOT = process.env.CHECKIN_PILOT || "Diego Clavel, Ruben Aguila, George Hernandez, Stephanie Haines, Jeffery Mcgonigle";
 // Managers who get the daily list of unanswered check-ins.
-const DIGEST_TO = process.env.CHECKIN_DIGEST_TO || "David Gómez, Jeffery Mcgonigle";
+const DIGEST_TO =
+  process.env.CHECKIN_DIGEST_TO ||
+  "David Gómez, Jeffery Mcgonigle, Zurielle Herndon, Abraham Marin, Jason Masler, Brandon Pacheco";
 
 const normName = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
 
@@ -157,6 +160,11 @@ const CHECKIN_STAGES = [
   "under contract", "active listing", "nurture",
 ];
 
+// A lead never moves back down the pipeline (a new appointment covers that).
+// Nurture sits outside the order: any lead can go there or come back from it.
+const stageRank = (s) => CHECKIN_STAGES.slice(0, -1).indexOf(String(s || "").trim().toLowerCase());
+const isBackward = (from, to) => stageRank(from) >= 0 && stageRank(to) >= 0 && stageRank(to) < stageRank(from);
+
 // FUB's spelling of those stages, in the order above.
 async function checkinStages() {
   const names = (await fubList("/stages?limit=100", "stages")).map((s) => s.name);
@@ -190,6 +198,7 @@ async function scanAndAsk({ now = Date.now(), log = console.log } = {}) {
   log(`Check-in scan: ${appts.length} appointments in window, ${asked} agents asked`);
   await remindOpen({ now, log });
   await sendDigest({ now, log });
+  await sendMorningPlans({ now, log });
 }
 
 // Returns true when a DM went out. `agentUserId` (the "test" DM) asks that
@@ -226,7 +235,7 @@ async function askAboutAppointment(appt, { agentUserId, log = console.log } = {}
   let notMet = outcomes.filter((o) => NOT_MET.test(o.name));
   if (!notMet.length) notMet = [{ id: "notmet", name: "Didn't happen / Reschedule" }];
   const buttons = [
-    ...stages.map((name, i) => ({ actionId: `stage:${i}`, name })),
+    ...stages.filter((name) => !isBackward(person.stage, name)).map((name) => ({ actionId: `stage:${stages.indexOf(name)}`, name })),
     ...notMet.map((o) => ({ actionId: `outcome:${o.id}`, name: o.name })),
   ];
   const dm = await slack("conversations.open", { users: agent.slackId });
@@ -444,7 +453,7 @@ async function draftPlan(rec) {
     const asked = /\b(stage|move|change|put|set|update)\b/.test(later) && stages.some((s) => s !== picked && later.includes(s.toLowerCase()));
     if (stages.includes(picked) && !(asked && plan.stage)) plan.stage = picked;
   }
-  if (plan.stage === rec.person.stage) plan.stage = null;
+  if (plan.stage === rec.person.stage || isBackward(rec.person.stage, plan.stage)) plan.stage = null;
   plan.outcomeName = (outcomes.find((o) => o.id === plan.outcomeId) || {}).name || null;
   const a = plan.appointment;
   if (a) {
@@ -543,6 +552,54 @@ async function applyPlan(rec) {
   return done;
 }
 
+// Weekdays at 8 AM PT: DM each pilot agent today's appointments and who to
+// call first (tasks due, new leads, then the stalest), from the same ranking
+// Claudio uses for "who should I call today".
+async function sendMorningPlans({ now = Date.now(), log = console.log, only } = {}) {
+  const d = new Date(now);
+  const hour = Number(d.toLocaleString("en-US", { timeZone: TZ, hour: "numeric", hour12: false }));
+  const weekday = d.toLocaleDateString("en-US", { timeZone: TZ, weekday: "long" });
+  if (!only && (hour !== 8 || /saturday|sunday/i.test(weekday))) return;
+  const store = checkinStore();
+  const day = d.toLocaleDateString("en-CA", { timeZone: TZ });
+  const ids = only ? [only] : PILOT.trim().toLowerCase() === "all" ? [] : await resolveUsers(PILOT);
+  for (const fubUserId of ids) {
+    if (!only && (await store.get(`morning/${day}/${fubUserId}`))) continue;
+    try {
+      const [u, agent] = await Promise.all([fub(`/users/${fubUserId}`), slackUserFor(fubUserId)]);
+      if (!agent) continue;
+      if (!only) await store.set(`morning/${day}/${fubUserId}`, String(now));
+      const dayStart = pacificISO(day, "00:00");
+      const dayEnd = new Date(Date.parse(dayStart) + 864e5 - 1).toISOString();
+      const [appts, calls] = await Promise.all([
+        fubList(`/appointments?userId=${fubUserId}&start=${encodeURIComponent(dayStart)}&end=${encodeURIComponent(dayEnd)}&limit=100`, "appointments"),
+        getMyCallList({ limit: 8 }, { id: u.id, name: u.name, role: u.role }),
+      ]);
+      const list = JSON.parse(calls.text || "{}");
+      const lead = (id, name) => `<${FUB_APP}/2/people/view/${id}|${name}>`;
+      const apptLines = appts
+        .filter((a) => (a.invitees || []).some((i) => i.userId === fubUserId))
+        .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
+        .map((a) => {
+          const p = (a.invitees || []).find((i) => i.personId);
+          return `• ${a.allDay ? "All day" : fmtTime(a.start).replace(/^\w+ /, "")}: ${a.title || a.type || "Appointment"}${p ? ` with ${lead(p.personId, p.name || "lead")}` : ""}`;
+        });
+      const callLines = (list.callList || []).map((c) => `• ${lead(c.id, c.name)}${c.phone ? ` · ${c.phone}` : ""} · _${c.why}_`);
+      const text = [
+        `☀️ Good morning <@${agent.slackId}>! Here's your plan for ${weekday}.`,
+        `*📅 Appointments today (${apptLines.length})*\n${apptLines.join("\n") || "None on your calendar."}`,
+        `*📞 Call first*${list.leadsWithTasksDue ? ` (${list.leadsWithTasksDue} with tasks due)` : ""}\n${callLines.join("\n") || "Nothing urgent. Nice!"}`,
+        "Want more? Ask Claudio in FUB: _who should I call today?_",
+      ].join("\n\n");
+      const dm = await slack("conversations.open", { users: agent.slackId });
+      await slack("chat.postMessage", { channel: dm.channel.id, text, unfurl_links: false });
+      log(`Morning plan: sent to ${u.name} (${apptLines.length} appts, ${callLines.length} calls)`);
+    } catch (err) {
+      console.error(`Morning plan for FUB user ${fubUserId} failed:`, err.message);
+    }
+  }
+}
+
 // Who the pilot and digest lists resolve to in FUB, for the "pilot" DM.
 async function pilotReport() {
   const users = await fubList("/users?limit=100", "users");
@@ -556,6 +613,7 @@ async function pilotReport() {
 
 module.exports = {
   pilotReport,
+  sendMorningPlans,
   checkinStore,
   slack,
   slackGet,

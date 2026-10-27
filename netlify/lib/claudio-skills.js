@@ -63,6 +63,25 @@ const SKILL_DEFS = [
       },
     },
   },
+  {
+    name: "get_pond_call_list",
+    description:
+      `A call list from a lead pond the signed-in agent belongs to, e.g. "go through my pond and find leads in Whittier under 700k for my open house, ranked by most activity". Filters by city, price, stage and tag; ranks the most recently active first (or the stalest first). Returns at most 25 leads; it never exports a pond.`,
+    input_schema: {
+      type: "object",
+      properties: {
+        pond: { type: "string", description: "Pond name, or part of it. Leave out to use the agent's only pond." },
+        city: { type: "string", description: "Only leads with an address in this city." },
+        priceBelow: { type: "integer" },
+        priceAbove: { type: "integer" },
+        stage: { type: "string" },
+        tag: { type: "string" },
+        activeWithinDays: { type: "integer", description: "Only leads with activity in the last N days, e.g. 365 for the last 12 months." },
+        sort: { type: "string", enum: ["most_active", "stalest"], description: "Default most_active." },
+        limit: { type: "integer", description: "How many leads (default 15, max 25)." },
+      },
+    },
+  },
 ];
 
 const SKILL_NAMES = new Set(SKILL_DEFS.map((d) => d.name));
@@ -233,12 +252,66 @@ async function getMyCallList(input, user) {
   };
 }
 
+// Pond lists go through the shared key, so the agent must be a member of the
+// pond. Results are capped like every other list (no exports).
+async function getPondCallList(input, user) {
+  if (!user || !user.id) return { text: "Can't tell who is signed in, so I can't read ponds right now.", isError: true };
+  const isBroker = /broker|admin|owner/i.test(user.role || "");
+  const ponds = (await fub("/ponds?limit=100")).ponds || [];
+  const mine = ponds.filter((p) => isBroker || p.userId === user.id || (p.userIds || []).includes(user.id));
+  const want = String(input.pond || "").trim().toLowerCase();
+  const matches = want ? mine.filter((p) => String(p.name).toLowerCase().includes(want)) : mine;
+  if (matches.length !== 1) {
+    return {
+      text: JSON.stringify({
+        error: matches.length ? "More than one pond matches; ask which one." : `No pond${want ? ` matching "${input.pond}"` : ""} that ${user.name} belongs to.`,
+        pondsYouBelongTo: mine.map((p) => p.name),
+      }),
+      isError: !matches.length,
+    };
+  }
+  const pond = matches[0];
+  const limit = Math.min(Math.max(Number(input.limit) || 15, 1), 25);
+  const q = [
+    `assignedPondId=${pond.id}`,
+    `sort=${input.sort === "stalest" ? "lastActivity" : "-lastActivity"}`,
+    "limit=100",
+    "fields=id,name,firstName,lastName,stage,phones,addresses,price,lastActivity,tags",
+    input.priceBelow ? `priceBelow=${Number(input.priceBelow)}` : "",
+    input.priceAbove ? `priceAbove=${Number(input.priceAbove)}` : "",
+    input.stage ? `stage=${encodeURIComponent(input.stage)}` : "",
+    input.tag ? `tags=${encodeURIComponent(input.tag)}` : "",
+    input.activeWithinDays ? `lastActivityAfter=${encodeURIComponent(new Date(Date.now() - Number(input.activeWithinDays) * 864e5).toISOString())}` : "",
+  ].filter(Boolean).join("&");
+  const city = String(input.city || "").trim().toLowerCase();
+  const out = [];
+  let checked = 0;
+  // Cursor paging (deep offsets are disabled); stop once the list is full.
+  for (let url = `/people?${q}`, page = 0; url && page < 10 && out.length < limit; page++) {
+    const data = await fub(url);
+    for (const p of data.people || []) {
+      checked++;
+      if (SKIP_STAGES.test(p.stage || "")) continue;
+      if (city && !(p.addresses || []).some((a) => String(a.city || "").trim().toLowerCase() === city)) continue;
+      if (out.length >= limit) break;
+      const name = p.name || `${p.firstName || ""} ${p.lastName || ""}`.trim() || `Lead #${p.id}`;
+      const addr = (p.addresses || [])[0];
+      out.push({ id: p.id, name, stage: p.stage, phone: phoneOf(p), city: addr && addr.city, price: p.price || undefined, lastActivity: p.lastActivity });
+    }
+    const next = data._metadata && data._metadata.nextLink;
+    url = next ? next.replace(/^https:\/\/api\.followupboss\.com\/v1/, "") : null;
+  }
+  console.log(`Claudio skill get_pond_call_list user=${user.id} pond=${pond.id} checked=${checked} out=${out.length}`);
+  return { text: JSON.stringify({ pond: pond.name, leadsChecked: checked, callList: out }), isError: false };
+}
+
 async function runSkill(name, input, user) {
   if (!process.env.FUB_API_KEY) return { text: "FUB_API_KEY is not set on Netlify.", isError: true };
   if (name === "move_lead_to_pond") return moveLeadToPond(input || {}, user);
   if (name === "get_lead_details") return getLeadDetails(input || {}, user);
   if (name === "get_my_call_list") return getMyCallList(input || {}, user);
+  if (name === "get_pond_call_list") return getPondCallList(input || {}, user);
   return { text: `Unknown skill ${name}.`, isError: true };
 }
 
-module.exports = { SKILL_DEFS, SKILL_NAMES, runSkill, fub };
+module.exports = { SKILL_DEFS, SKILL_NAMES, runSkill, fub, getMyCallList, endOfTodayPacific };
