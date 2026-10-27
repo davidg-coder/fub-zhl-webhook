@@ -32,6 +32,9 @@ const jobStore = () => store("claudio-jobs");
 // Embedded-app users: "<accountId>:<userId>" -> session id, so the app inside
 // FUB finds the agent's session from FUB's signed context, not browser storage.
 const appLinkStore = () => store("claudio-app-links");
+// Power Portal questions, saved by claudio-portal under the jobId before the
+// background function runs, so the portal user can't be forged in a request.
+const portalJobStore = () => store("claudio-portal-jobs");
 
 function randomId(bytes = 32) {
   return crypto.randomBytes(bytes).toString("hex");
@@ -249,6 +252,7 @@ module.exports = {
   convoStore,
   jobStore,
   appLinkStore,
+  portalJobStore,
   randomId,
   pkcePair,
   tokenRequest,

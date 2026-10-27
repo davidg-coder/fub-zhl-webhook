@@ -59,6 +59,16 @@ Writes (notes, stage changes, tasks, new contacts, appointments, pausing an acti
 The current FUB page is given with each request. "This lead", "him", "her" means the person on that page when there is one.
 If a tool fails or returns nothing, say so plainly. Never guess data.`;
 
+// Added when Claudio runs inside the Power Portal (claudio-portal). There is
+// no FUB sign-in there, so only Claudio's own skills are available.
+const PORTAL_PROMPT = `
+
+Inside the Power Portal:
+- This request comes from the Power Portal (Power's internal web portal), not FUB. Only Claudio's own tools are available here (get_my_numbers, get_my_call_list, get_pond_call_list, get_lead_details, move_lead_to_pond). For notes, tasks, appointments or texts, point the agent to Claudio in FUB.
+- The answer is shown as text, not read aloud: "display" is the answer (plain text, short lines; it can be a few lines longer than in FUB) and "speech" is a one-sentence summary.
+- Performance and plan questions ("how am I doing", "am I on track for my goal", "how many appointments do I need"): call get_my_numbers and compare with the agent's 2027 Business Plan when the request includes one. Show the math in a line or two (goal, actual so far, pace, gap). If the plan doesn't have the number asked about, say so; never invent goals.
+- Other agents' numbers are for portal role "admin" only (pass agentName to get_my_numbers). Agents and team leads see their own numbers and plan here.`;
+
 const OUTPUT_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -107,6 +117,12 @@ async function fubTools(mcp) {
 function describePage(page = {}, user) {
   const lines = [`Today: ${new Date().toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "long", year: "numeric", month: "long", day: "numeric" })}`];
   if (user) lines.push(`Signed-in FUB user: ${user.name} (user id ${user.id}, role ${user.role})`);
+  if (page.portal) {
+    const p = page.portal;
+    lines.push(`Current page: Power Portal${p.tab ? ` (${p.tab} tab)` : ""}. Portal role: ${p.role}${p.offices && p.offices.length ? `, offices: ${p.offices.join(", ")}` : ""}`);
+    if (p.businessPlan) lines.push(`Agent's 2027 Business Plan (from the Portal):\n${JSON.stringify(p.businessPlan).slice(0, 12000)}`);
+    if (p.performance) lines.push(`Performance data shown in the Portal:\n${JSON.stringify(p.performance).slice(0, 6000)}`);
+  }
   if (page.personId) {
     lines.push(`Current FUB page: person profile, person id ${page.personId}${page.personName ? ` (${page.personName})` : ""}`);
   } else if (page.path) {
@@ -153,30 +169,38 @@ function trimForStorage(messages) {
 // Answers one request; returns a Netlify-style response. Shared by this
 // synchronous endpoint and claudio-ask-background (long questions outlive the
 // ~10s sync function limit, so the extension uses the background one).
-async function runAsk(body) {
+// portalUser is passed only by claudio-portal (never read from the request
+// body), after it has verified who is asking; it runs without FUB's MCP tools.
+async function runAsk(body, portalUser) {
   if (!process.env.ANTHROPIC_API_KEY) return json(500, { error: "ANTHROPIC_API_KEY is not set on Netlify" });
   const { session, conversationId, text, page } = body;
   if (!text || typeof text !== "string") return json(400, { error: "text is required" });
   if (!/^[a-f0-9]{32}$/.test(conversationId || "")) return json(400, { error: "invalid conversationId" });
 
-  let fubToken;
-  try {
-    fubToken = await accessTokenFor(session);
-  } catch (err) {
-    if (err.message === "SESSION_INVALID") return json(401, { error: "reconnect" });
-    throw err;
-  }
+  const portal = Boolean(portalUser);
+  let mcp, tools, user;
+  if (portal) {
+    tools = { defs: [], names: new Set() };
+    user = portalUser;
+  } else {
+    let fubToken;
+    try {
+      fubToken = await accessTokenFor(session);
+    } catch (err) {
+      if (err.message === "SESSION_INVALID") return json(401, { error: "reconnect" });
+      throw err;
+    }
 
-  let mcp, tools;
-  try {
-    mcp = await openMcp(fubToken);
-    tools = await fubTools(mcp);
-  } catch (err) {
-    console.error("Claudio FUB MCP connect failed:", err.message);
-    if (/\b401\b|\b403\b/.test(err.message)) return json(401, { error: "reconnect" });
-    return json(502, { error: "fub_mcp", speech: "I couldn't reach Follow Up Boss just now. Please try again." });
+    try {
+      mcp = await openMcp(fubToken);
+      tools = await fubTools(mcp);
+    } catch (err) {
+      console.error("Claudio FUB MCP connect failed:", err.message);
+      if (/\b401\b|\b403\b/.test(err.message)) return json(401, { error: "reconnect" });
+      return json(502, { error: "fub_mcp", speech: "I couldn't reach Follow Up Boss just now. Please try again." });
+    }
+    user = await currentUserFor(session, mcp, tools.currentUserTool);
   }
-  const user = await currentUserFor(session, mcp, tools.currentUserTool);
 
   const convos = convoStore();
   const convoKey = `${session}/${conversationId}`;
@@ -202,7 +226,7 @@ async function runAsk(body) {
     },
     tools: [...tools.defs, ...SKILL_DEFS],
     // Caches the tool definitions + system prompt (tools render before system).
-    system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+    system: [{ type: "text", text: portal ? SYSTEM_PROMPT + PORTAL_PROMPT : SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
   };
 
   const trace = [];

@@ -82,6 +82,18 @@ const SKILL_DEFS = [
       },
     },
   },
+  {
+    name: "get_my_numbers",
+    description:
+      `The signed-in agent's own numbers straight from FUB: open leads per stage (their pipeline), new leads assigned, appointments and calls over the last N days. Use it for "how am I doing", "how many appointments did I have this month", "what does my pipeline look like", and to compare against their business-plan goals. Admins may pass agentName to see another agent.`,
+    input_schema: {
+      type: "object",
+      properties: {
+        days: { type: "integer", description: "Look-back window for new leads, appointments and calls (default 30, max 365)." },
+        agentName: { type: "string", description: "Admins only: another agent's FUB name." },
+      },
+    },
+  },
 ];
 
 const SKILL_NAMES = new Set(SKILL_DEFS.map((d) => d.name));
@@ -305,12 +317,82 @@ async function getPondCallList(input, user) {
   return { text: JSON.stringify({ pond: pond.name, leadsChecked: checked, callList: out }), isError: false };
 }
 
+// Pipeline stages counted for get_my_numbers, in funnel order.
+const PIPELINE_STAGES = [
+  "Lead", "Attempted Contact", "Spoke with Customer", "Appointment Set", "Met with customer",
+  "Showing Homes", "Submitting Offers", "Listing agreement", "Under Contract", "Active Listing", "Nurture", "Closed",
+];
+
+// Follows the cursor (deep offsets are disabled) through a list sorted newest
+// first, stopping once rows are older than `since` or after 10 pages.
+async function countSince(path, key, since, keep) {
+  let n = 0;
+  let capped = false;
+  for (let url = path, page = 0; url; page++) {
+    if (page >= 10) {
+      capped = true;
+      break;
+    }
+    const data = await fub(url);
+    const rows = data[key] || [];
+    let older = false;
+    for (const r of rows) {
+      if (String(r.created) < since) older = true;
+      else if (keep(r)) n++;
+    }
+    const next = data._metadata && data._metadata.nextLink;
+    url = !older && next ? next.replace(/^https:\/\/api\.followupboss\.com\/v1/, "") : null;
+  }
+  return { n, capped };
+}
+
+async function getMyNumbers(input, user) {
+  if (!user || !user.id) return { text: "Can't tell who is signed in, so I can't read numbers right now.", isError: true };
+  const isAdmin = /broker|admin|owner/i.test(user.role || "") || user.portalRole === "admin";
+  let agent = { id: user.id, name: user.name };
+  if (input.agentName && String(input.agentName).trim().toLowerCase() !== String(user.name || "").toLowerCase()) {
+    if (!isAdmin) return { text: "Other agents' numbers are for admins only.", isError: true };
+    const want = String(input.agentName).trim().toLowerCase();
+    const users = (await fub("/users?limit=100")).users || [];
+    const found = users.filter((u) => String(u.name).toLowerCase().includes(want));
+    if (found.length !== 1) return { text: JSON.stringify({ error: found.length ? "More than one user matches; ask which one." : `No FUB user matching "${input.agentName}".`, matches: found.map((u) => u.name) }), isError: !found.length };
+    agent = { id: found[0].id, name: found[0].name };
+  }
+  const days = Math.min(Math.max(Number(input.days) || 30, 1), 365);
+  const since = new Date(Date.now() - days * 864e5).toISOString();
+  const now = new Date().toISOString();
+
+  const total = (q) => fub(`/people?assignedUserId=${agent.id}&limit=1&fields=id${q}`).then((d) => (d._metadata && d._metadata.total) || 0).catch(() => null);
+  const [pipeline, newLeads, appts, calls] = await Promise.all([
+    Promise.all(PIPELINE_STAGES.map((st) => total(`&stage=${encodeURIComponent(st)}`))),
+    countSince(`/people?assignedUserId=${agent.id}&sort=-created&limit=100&fields=id,created,assignedUserId`, "people", since, (p) => p.assignedUserId === agent.id).catch(() => null),
+    fub(`/appointments?userId=${agent.id}&start=${encodeURIComponent(since)}&end=${encodeURIComponent(now)}&limit=100`)
+      .then((d) => (d.appointments || []).filter((a) => (a.invitees || []).some((i) => i.userId === agent.id)))
+      .catch(() => null),
+    countSince(`/calls?userId=${agent.id}&sort=-created&limit=100`, "calls", since, (c) => c.userId === agent.id).catch(() => null),
+  ]);
+  const out = {
+    agent: agent.name,
+    windowDays: days,
+    pipelineByStage: Object.fromEntries(PIPELINE_STAGES.map((st, i) => [st, pipeline[i]]).filter(([, n]) => n)),
+    newLeadsAssigned: newLeads && (newLeads.capped ? `${newLeads.n}+` : newLeads.n),
+    appointments: appts && {
+      total: appts.length,
+      byType: appts.reduce((m, a) => ({ ...m, [a.type || a.title || "Other"]: (m[a.type || a.title || "Other"] || 0) + 1 }), {}),
+    },
+    calls: calls && (calls.capped ? `${calls.n}+` : calls.n),
+  };
+  console.log(`Claudio skill get_my_numbers user=${user.id} agent=${agent.id} days=${days}`);
+  return { text: JSON.stringify(out), isError: false };
+}
+
 async function runSkill(name, input, user) {
   if (!process.env.FUB_API_KEY) return { text: "FUB_API_KEY is not set on Netlify.", isError: true };
   if (name === "move_lead_to_pond") return moveLeadToPond(input || {}, user);
   if (name === "get_lead_details") return getLeadDetails(input || {}, user);
   if (name === "get_my_call_list") return getMyCallList(input || {}, user);
   if (name === "get_pond_call_list") return getPondCallList(input || {}, user);
+  if (name === "get_my_numbers") return getMyNumbers(input || {}, user);
   return { text: `Unknown skill ${name}.`, isError: true };
 }
 
