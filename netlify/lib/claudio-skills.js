@@ -94,6 +94,20 @@ const SKILL_DEFS = [
       },
     },
   },
+  {
+    name: "add_collaborator",
+    description:
+      'Add another FUB user as a collaborator on one lead, for "add <name> as collaborator", "share this lead with <name>", "let <name> work this lead too". It never changes who the lead is assigned to. Call first without confirmed to get a preview (it resolves the user name), read it back, and only after the agent says yes call again with confirmed=true. Use the person id of the lead on the current page or from a lookup; never guess it.',
+    input_schema: {
+      type: "object",
+      properties: {
+        personId: { type: "integer", description: "FUB person id of the lead." },
+        collaboratorName: { type: "string", description: "Name of the FUB user to add, as the agent said it." },
+        confirmed: { type: "boolean", description: "true only after the agent said yes to the preview." },
+      },
+      required: ["personId", "collaboratorName"],
+    },
+  },
 ];
 
 const SKILL_NAMES = new Set(SKILL_DEFS.map((d) => d.name));
@@ -393,9 +407,7 @@ async function getMyNumbers(input, user) {
   let agent = { id: user.id, name: user.name };
   if (input.agentName && String(input.agentName).trim().toLowerCase() !== String(user.name || "").toLowerCase()) {
     if (!isAdmin) return { text: "Other agents' numbers are for admins only.", isError: true };
-    const want = String(input.agentName).trim().toLowerCase();
-    const users = (await fub("/users?limit=100")).users || [];
-    const found = users.filter((u) => String(u.name).toLowerCase().includes(want));
+    const found = findUser(await allUsers(), input.agentName);
     if (found.length !== 1) return { text: JSON.stringify({ error: found.length ? "More than one user matches; ask which one." : `No FUB user matching "${input.agentName}".`, matches: found.map((u) => u.name) }), isError: !found.length };
     agent = { id: found[0].id, name: found[0].name };
   }
@@ -443,6 +455,91 @@ async function getMyNumbers(input, user) {
   return { text: JSON.stringify(out), isError: false };
 }
 
+// /users is capped at 100 per page and the team has more, so follow nextLink.
+async function allUsers() {
+  const users = [];
+  let path = "/users?limit=100&fields=id,name,role,status";
+  for (let i = 0; path && i < 10; i++) {
+    const data = await fub(path);
+    users.push(...(data.users || []));
+    const next = data._metadata && data._metadata.nextLink;
+    path = next ? next.replace(FUB_BASE, "") : null;
+  }
+  return users;
+}
+
+function findUser(users, name) {
+  const want = String(name || "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!want) return [];
+  const exact = users.filter((u) => String(u.name).toLowerCase() === want);
+  if (exact.length) return exact;
+  const words = want.split(" ");
+  return users.filter((u) => words.every((w) => String(u.name).toLowerCase().includes(w)));
+}
+
+async function addCollaborator(input, user) {
+  if (!user || !user.id) return { text: "Can't tell who is signed in, so I can't change collaborators right now.", isError: true };
+  const personId = Number(input.personId);
+  if (!Number.isInteger(personId) || personId <= 0) return { text: "A valid personId is required.", isError: true };
+
+  const person = await fub(`/people/${personId}?fields=id,name,firstName,lastName,assignedTo,assignedUserId,collaborators`);
+  const name = person.name || `${person.firstName || ""} ${person.lastName || ""}`.trim() || `Lead #${personId}`;
+  const isBroker = /broker|admin|owner/i.test(user.role || "");
+  if (!isBroker && person.assignedUserId !== user.id) {
+    return {
+      text: `${name} is assigned to ${person.assignedTo || "someone else"}, not ${user.name}. Agents can only add collaborators to their own leads.`,
+      isError: true,
+    };
+  }
+
+  const found = findUser((await allUsers()).filter((u) => !/inactive|deleted/i.test(u.status || "")), input.collaboratorName);
+  if (found.length !== 1) {
+    return {
+      text: JSON.stringify({
+        error: found.length ? "More than one user matches; ask which one." : `No active FUB user matching "${input.collaboratorName}".`,
+        matches: found.slice(0, 10).map((u) => u.name),
+      }),
+      isError: !found.length,
+    };
+  }
+  const collab = found[0];
+  const current = person.collaborators || [];
+  if (current.some((c) => c.id === collab.id)) {
+    return { text: `${collab.name} is already on ${name}. Nothing to do.`, isError: false };
+  }
+  if (!input.confirmed) {
+    return {
+      text: JSON.stringify({
+        preview: true,
+        person: { id: personId, name, assignedTo: person.assignedTo, collaborators: current.map((c) => c.name) },
+        action: `Add ${collab.name} as a collaborator on ${name}. ${person.assignedTo || "The assigned agent"} stays the assigned agent.`,
+        next: "Ask the agent to confirm, then call add_collaborator again with confirmed=true.",
+      }),
+      isError: false,
+    };
+  }
+
+  // PUT replaces the whole list, so send the existing collaborators too.
+  const ids = [...current.map((c) => c.id), collab.id];
+  try {
+    await fub(`/people/${personId}`, { method: "PUT", body: JSON.stringify({ collaborators: ids }) });
+  } catch (err) {
+    console.error("Claudio skill add_collaborator id list rejected, retrying as objects:", err.message);
+    await fub(`/people/${personId}`, { method: "PUT", body: JSON.stringify({ collaborators: ids.map((id) => ({ id })) }) });
+  }
+  const after = await fub(`/people/${personId}?fields=id,collaborators`);
+  const names = (after.collaborators || []).map((c) => c.name);
+  if (!(after.collaborators || []).some((c) => c.id === collab.id)) {
+    return { text: `FUB accepted the change but ${collab.name} isn't showing as a collaborator on ${name}. Add them from the contact profile.`, isError: true };
+  }
+  await fub("/notes", {
+    method: "POST",
+    body: JSON.stringify({ personId, subject: "Collaborator added via Claudio", body: `${user.name} added ${collab.name} as a collaborator (via Claudio).` }),
+  }).catch((err) => console.error("Claudio skill add_collaborator note failed:", err.message));
+  console.log(`Claudio skill add_collaborator person=${personId} collaborator=${collab.id} by user=${user.id}`);
+  return { text: JSON.stringify({ done: true, person: { id: personId, name }, added: collab.name, collaborators: names }), isError: false };
+}
+
 async function runSkill(name, input, user) {
   if (!process.env.FUB_API_KEY) return { text: "FUB_API_KEY is not set on Netlify.", isError: true };
   if (name === "move_lead_to_pond") return moveLeadToPond(input || {}, user);
@@ -450,6 +547,7 @@ async function runSkill(name, input, user) {
   if (name === "get_my_call_list") return getMyCallList(input || {}, user);
   if (name === "get_pond_call_list") return getPondCallList(input || {}, user);
   if (name === "get_my_numbers") return getMyNumbers(input || {}, user);
+  if (name === "add_collaborator") return addCollaborator(input || {}, user);
   return { text: `Unknown skill ${name}.`, isError: true };
 }
 
