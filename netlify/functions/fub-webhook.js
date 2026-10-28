@@ -10,6 +10,12 @@ const ZHL_TAGS = new Set([
   "Zillow zhl Status: Underwriting",
   "Zillow zhl Status: Evaluating Finances",
   "Zillow zhl Status: Funded",
+  // Entry/exit stages for the Power Portal ZHL Funnel — FUB never removes old
+  // status tags, so the add date is the only way to tell a lead's current stage.
+  "ZHL Transferred",
+  "Zillow zhl Status: Contacting",
+  "Zillow zhl Status: Contact Made",
+  "Zillow zhl Status: No Longer Active",
 ]);
 
 // Tags the recruiting dashboard's hand-raiser tracker cares about — kept
@@ -181,8 +187,8 @@ exports.handler = async (event) => {
     await allTagsStore.setJSON("events", [...existingAll, ...newAllEntries]);
   }
 
-  // ZHL-specific log (unchanged) — only the 5 known status tags, kept
-  // separate since zhl-events.js / the sales dashboard already reads this.
+  // ZHL-specific log — only the ZHL_TAGS allowlist, kept separate (and never
+  // pruned) since zhl-events.js / the sales dashboard and Portal read this.
   const matchedTags = tags.filter((t) => ZHL_TAGS.has(t));
   if (matchedTags.length > 0) {
     const zhlStore = getStore({
