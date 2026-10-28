@@ -7,6 +7,9 @@ const FUB_BASE = "https://api.followupboss.com/v1";
 // pond audit (n8n) reads the "requested to move to pond" note for who moved it.
 const AGENT_MOVE_POND_ID = 274;
 const MOVE_TAG = "#movetopond";
+// Leads who asked not to be contacted: DNC tag + the "DNC" pond.
+const DNC_POND_ID = 209;
+const DNC_TAG = "DNC";
 
 function fubAuth() {
   return "Basic " + Buffer.from(`${process.env.FUB_API_KEY}:`).toString("base64");
@@ -95,6 +98,20 @@ const SKILL_DEFS = [
     },
   },
   {
+    name: "mark_dnc",
+    description:
+      'Mark one lead Do Not Contact: tags it DNC, moves it to the "DNC" pond and logs a note saying who did it. Use it for "DNC", "do not call", "mark as do not contact", "they asked to be removed from our lists", never a plain tag change. Call first without confirmed to get a preview, read it back, and only after the agent says yes call again with confirmed=true. Use the person id of the lead on the current page or from a lookup; never guess it.',
+    input_schema: {
+      type: "object",
+      properties: {
+        personId: { type: "integer", description: "FUB person id of the lead." },
+        reason: { type: "string", description: "Why, in the agent's words, if they gave one." },
+        confirmed: { type: "boolean", description: "true only after the agent said yes to the preview." },
+      },
+      required: ["personId"],
+    },
+  },
+  {
     name: "add_collaborator",
     description:
       'Add another FUB user as a collaborator on one lead, for "add <name> as collaborator", "share this lead with <name>", "let <name> work this lead too". It never changes who the lead is assigned to. Call first without confirmed to get a preview (it resolves the user name), read it back, and only after the agent says yes call again with confirmed=true. Use the person id of the lead on the current page or from a lookup; never guess it.',
@@ -157,6 +174,52 @@ async function moveLeadToPond(input, user) {
   console.log(`Claudio skill move_lead_to_pond person=${personId} by user=${user.id}`);
   return {
     text: JSON.stringify({ done: true, person: { id: personId, name }, pond: "Agent Move to Pond", tagAdded: MOVE_TAG, noteLogged: true }),
+    isError: false,
+  };
+}
+
+async function markDnc(input, user) {
+  if (!user || !user.id) return { text: "Can't tell who is signed in, so I can't mark leads DNC right now.", isError: true };
+  const personId = Number(input.personId);
+  if (!Number.isInteger(personId) || personId <= 0) return { text: "A valid personId is required.", isError: true };
+
+  const person = await fub(`/people/${personId}`);
+  const name = person.name || `${person.firstName || ""} ${person.lastName || ""}`.trim() || `Lead #${personId}`;
+  const isBroker = /broker|admin|owner/i.test(user.role || "");
+  if (!isBroker && person.assignedUserId !== user.id) {
+    return {
+      text: `${name} is assigned to ${person.assignedTo || "someone else"}, not ${user.name}. Agents can only mark their own leads DNC.`,
+      isError: true,
+    };
+  }
+  const hasTag = (person.tags || []).some((t) => String(t).toLowerCase() === DNC_TAG.toLowerCase());
+  if (hasTag && person.assignedPondId === DNC_POND_ID) {
+    return { text: `${name} is already tagged ${DNC_TAG} and in the DNC pond. Nothing to do.`, isError: false };
+  }
+  if (!input.confirmed) {
+    return {
+      text: JSON.stringify({
+        preview: true,
+        person: { id: personId, name, stage: person.stage, assignedTo: person.assignedTo, alreadyTagged: hasTag },
+        action: `${hasTag ? "" : `Tag ${name} ${DNC_TAG}, `}move ${name} to the "DNC" pond and log a note.`,
+        next: "Ask the agent to confirm, then call mark_dnc again with confirmed=true.",
+      }),
+      isError: false,
+    };
+  }
+
+  await fub(`/people/${personId}?mergeTags=true`, {
+    method: "PUT",
+    body: JSON.stringify({ assignedPondId: DNC_POND_ID, tags: [DNC_TAG] }),
+  });
+  const reason = typeof input.reason === "string" && input.reason.trim() ? ` Reason: ${input.reason.trim().slice(0, 500)}` : "";
+  await fub("/notes", {
+    method: "POST",
+    body: JSON.stringify({ personId, subject: "Marked DNC via Claudio", body: `${user.name} marked this lead Do Not Contact and moved it to the DNC pond (via Claudio).${reason}` }),
+  });
+  console.log(`Claudio skill mark_dnc person=${personId} by user=${user.id}`);
+  return {
+    text: JSON.stringify({ done: true, person: { id: personId, name }, pond: "DNC", tag: DNC_TAG, noteLogged: true }),
     isError: false,
   };
 }
@@ -547,6 +610,7 @@ async function runSkill(name, input, user) {
   if (name === "get_my_call_list") return getMyCallList(input || {}, user);
   if (name === "get_pond_call_list") return getPondCallList(input || {}, user);
   if (name === "get_my_numbers") return getMyNumbers(input || {}, user);
+  if (name === "mark_dnc") return markDnc(input || {}, user);
   if (name === "add_collaborator") return addCollaborator(input || {}, user);
   return { text: `Unknown skill ${name}.`, isError: true };
 }
