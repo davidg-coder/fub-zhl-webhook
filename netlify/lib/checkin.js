@@ -18,7 +18,9 @@ const { getStore } = require("@netlify/blobs");
 const Anthropic = require("@anthropic-ai/sdk");
 const { fub, getMyCallList } = require("./claudio-skills");
 
-const MODEL = process.env.CLAUDIO_MODEL || "claude-opus-5-5";
+// Check-in plans are a simple structured summary, so they run on Haiku
+// (Claudio in FUB keeps CLAUDIO_MODEL).
+const MODEL = process.env.CHECKIN_MODEL || "claude-haiku-5-5";
 const TZ = "America/Los_Angeles";
 // Appointment types that belong to recruiting (InterFace), not sales.
 const SKIP_TYPES = new RegExp(process.env.CHECKIN_SKIP_TYPES || "discovery|consultation|recruit", "i");
