@@ -9,6 +9,7 @@
 const Anthropic = require("@anthropic-ai/sdk");
 const { convoStore, accessTokenFor, openMcp, currentUserFor, json } = require("../lib/claudio");
 const { SKILL_DEFS, SKILL_NAMES, runSkill } = require("../lib/claudio-skills");
+const { addUsage, emptyUsage, logUsage } = require("../lib/usage-log");
 
 const MODEL = process.env.CLAUDIO_MODEL || "claude-opus-5-5";
 const MAX_TOOL_ROUNDS = 8;
@@ -249,6 +250,7 @@ async function runAsk(body, portalUser) {
   };
 
   const trace = [];
+  const spent = emptyUsage();
   let response;
   try {
     for (let round = 0; ; round++) {
@@ -258,6 +260,7 @@ async function runAsk(body, portalUser) {
         ...(lastRound && !portal ? { tool_choice: { type: "none" } } : {}),
         messages,
       });
+      addUsage(spent, response.usage);
       messages.push({ role: "assistant", content: response.content });
       if (response.stop_reason !== "tool_use" || lastRound) break;
 
@@ -301,6 +304,8 @@ async function runAsk(body, portalUser) {
       });
     }
     throw err;
+  } finally {
+    await logUsage("claudio", (response && response.model) || MODEL, spent, user && user.id);
   }
 
   let answer;

@@ -17,6 +17,7 @@ const crypto = require("crypto");
 const { getStore } = require("@netlify/blobs");
 const Anthropic = require("@anthropic-ai/sdk");
 const { fub, getMyCallList } = require("./claudio-skills");
+const { addUsage, emptyUsage, logUsage } = require("./usage-log");
 
 // Check-in plans are a simple structured summary, so they run on Haiku
 // (Claudio in FUB keeps CLAUDIO_MODEL).
@@ -441,6 +442,7 @@ async function draftPlan(rec) {
     system: PLAN_PROMPT,
     messages,
   });
+  await logUsage("checkin", response.model || MODEL, addUsage(emptyUsage(), response.usage), rec.agent.fubUserId);
   const text = response.content.filter((b) => b.type === "text").map((b) => b.text).join("");
   const plan = JSON.parse(text);
   if (plan.outcomeId != null && !outcomes.some((o) => o.id === plan.outcomeId)) plan.outcomeId = null;
