@@ -43,6 +43,7 @@
   .bubble { max-width: 88%; padding: 9px 12px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; }
   .me .bubble { background: linear-gradient(135deg, #3b82f6, #2563eb); color: #fff; border-radius: 14px 14px 4px 14px; }
   .bot .bubble { background: #fff; border-radius: 14px 14px 14px 4px; box-shadow: 0 1px 3px rgba(15,23,42,.08); }
+  .divider { align-self: center; font-size: 11px; color: #94a3b8; padding: 2px 0; }
   .bubble.live { color: #64748b; font-style: italic; background: #fff; }
   .typing { display: inline-flex; gap: 4px; padding: 4px 2px; }
   .typing i { width: 7px; height: 7px; border-radius: 50%; background: #93c5fd; animation: bounce 1.2s infinite; }
@@ -149,7 +150,10 @@
     blocked: null, // message shown instead of the chat
     conversationId: params.get("c") || store.get("conversationId"),
     lastActivity: params.get("c") ? Date.now() : store.get("lastActivity") || 0,
-    answer: null,
+    answer: store.get("answer"),
+    // Finished turns shown above the current one, so the agent can scroll back.
+    // A "divider" entry marks where an idle conversation restarted.
+    history: store.get("history") || [],
   };
 
   const T = {
@@ -292,8 +296,13 @@
       return;
     }
 
+    for (const h of state.history) {
+      if (h.divider) bodyEl.append(el("div", { class: "divider" }, t("newChat")));
+      else renderTurn(h, false);
+    }
     const a = state.answer;
     if (!a && mode !== "listening") {
+      if (state.history.length) return scrollToEnd();
       const chips = el("div", { class: "chips" });
       for (const s of t("suggestions")) chips.append(el("button", { class: "chip", "data-say": s }, s));
       bodyEl.append(welcome([el("p", {}, t("hint")), chips]));
@@ -303,8 +312,19 @@
       const me = el("div", { class: "msg me" });
       me.append(el("div", { class: "bubble live" }, live || t("listening")));
       bodyEl.append(me);
-      return;
+      return scrollToEnd();
     }
+    renderTurn(a, true, mode);
+    scrollToEnd();
+  }
+
+  function scrollToEnd() {
+    bodyEl.scrollTop = bodyEl.scrollHeight;
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  // last: only the newest answer gets the Yes/Cancel buttons.
+  function renderTurn(a, last, mode) {
     if (a.question) {
       const me = el("div", { class: "msg me" });
       me.append(el("div", { class: "bubble" }, a.question));
@@ -318,7 +338,7 @@
     }
     bodyEl.append(botMsg(a.display || a.speech || ""));
     if (a.items && a.items.length) bodyEl.append(renderItems(a.items));
-    if (a.needs_confirmation) {
+    if (last && a.needs_confirmation) {
       const row = el("div", { class: "confirm" });
       row.append(
         el("button", { class: "pill primary", "data-act": "yes" }, t("yes")),
@@ -385,8 +405,22 @@
     store.set("muted", state.muted);
     store.set("conversationId", state.conversationId);
     store.set("lastActivity", state.lastActivity);
+    store.set("history", state.history);
+    store.set("answer", state.busy ? null : state.answer);
   }
-  function resetConversation() {
+  // Moves the finished current answer into history (keeps the last 60 entries).
+  function archiveAnswer() {
+    const a = state.answer;
+    if (a && a.question && (a.display || a.speech)) {
+      state.history.push({ question: a.question, display: a.display, speech: a.speech, items: a.items || [] });
+      state.history = state.history.slice(-60);
+    }
+    state.answer = null;
+  }
+  function resetConversation(keepHistory) {
+    archiveAnswer();
+    if (!keepHistory) state.history = [];
+    else if (state.history.length && !state.history[state.history.length - 1].divider) state.history.push({ divider: true });
     state.conversationId = randomHex(16);
     state.answer = null;
     state.lastActivity = Date.now();
@@ -434,7 +468,7 @@
   // FUB's sandboxed iframe has no microphone permission; the popup is a
   // normal window on this site, so voice works there.
   function openVoiceWindow() {
-    if (!state.conversationId || Date.now() - state.lastActivity > CONVERSATION_IDLE_MS) resetConversation();
+    if (!state.conversationId || Date.now() - state.lastActivity > CONVERSATION_IDLE_MS) resetConversation(true);
     const url = new URL(location.href);
     url.searchParams.set("mode", "window");
     url.searchParams.set("c", state.conversationId);
@@ -507,8 +541,9 @@
 
   async function send(text) {
     if (state.busy || !text.trim() || !state.connected) return;
-    if (!state.conversationId || Date.now() - state.lastActivity > CONVERSATION_IDLE_MS) resetConversation();
+    if (!state.conversationId || Date.now() - state.lastActivity > CONVERSATION_IDLE_MS) resetConversation(true);
     state.busy = true;
+    archiveAnswer();
     state.answer = { question: text, items: [] };
     render("thinking");
     const res = await ask(text);
@@ -528,6 +563,7 @@
       needs_confirmation: Boolean(res.needs_confirmation),
       items: Array.isArray(res.items) ? res.items : [],
     };
+    save();
     render();
     speak(res.speech);
   }
@@ -582,7 +618,7 @@
 
   // ---------- start ----------
   async function start() {
-    if (Date.now() - state.lastActivity > CONVERSATION_IDLE_MS) resetConversation();
+    if (Date.now() - state.lastActivity > CONVERSATION_IDLE_MS) resetConversation(true);
     // FUB's app preview passes debugState to show each state; only "working" runs the real app.
     if (ctx.debugState && ctx.debugState !== "working") {
       state.blocked = T[state.lang][ctx.debugState] ? ctx.debugState : "unauthorized";

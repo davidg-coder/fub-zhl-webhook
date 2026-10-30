@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Claudio for Follow Up Boss",
   "short_name": "Claudio",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Voice assistant inside Follow Up Boss for Power Real Estate Group agents. Ask for call lists, lead info, notes and more by talking.",
   "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
   "permissions": ["storage"],

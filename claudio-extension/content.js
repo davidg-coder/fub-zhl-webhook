@@ -19,6 +19,9 @@
     conversationId: null,
     lastActivity: 0,
     answer: null, // { speech, display, needs_confirmation, items, question }
+    // Finished turns shown above the current one, so the agent can scroll back.
+    // A "divider" entry marks where an idle conversation restarted.
+    history: [],
   };
 
   const T = {
@@ -171,6 +174,7 @@
       .me .bubble { background: linear-gradient(135deg, #3b82f6, #2563eb); color: #fff; border-radius: 16px 16px 4px 16px;
         box-shadow: 0 4px 12px rgba(37,99,235,.25); }
       .bot .bubble { background: #fff; color: #0f172a; border-radius: 16px 16px 16px 4px; box-shadow: 0 1px 3px rgba(15,23,42,.08); }
+      .divider { align-self: center; font-size: 11px; color: #94a3b8; padding: 2px 0; }
       .bubble.live { color: #64748b; font-style: italic; }
 
       .typing { display: inline-flex; gap: 4px; padding: 4px 2px; }
@@ -332,7 +336,15 @@
       return;
     }
 
+    for (const h of state.history) {
+      if (h.divider) bodyEl.append(el("div", { class: "divider" }, t("newChat")));
+      else renderTurn(h, false);
+    }
     const a = state.answer;
+    if (!a && mode !== "listening" && state.history.length) {
+      bodyEl.scrollTop = bodyEl.scrollHeight;
+      return;
+    }
     if (!a && mode !== "listening") {
       const w = el("div", { class: "welcome" });
       const big = el("div", { class: "big" });
@@ -344,13 +356,8 @@
       return;
     }
 
-    if (a && a.question) {
-      const me = el("div", { class: "msg me" });
-      me.append(el("div", { class: "bubble" }, a.question));
-      bodyEl.append(me);
-    }
-
     if (mode === "listening") {
+      if (a) renderTurn(a, false);
       const me = el("div", { class: "msg me" });
       const bubble = el("div", { class: "bubble live" });
       bubble.style.background = "#fff";
@@ -358,24 +365,37 @@
       wave.innerHTML = "<i></i><i></i><i></i><i></i>";
       bubble.append(wave, document.createTextNode(live || t("listening")));
       me.append(bubble);
-      bodyEl.replaceChildren(me);
-    } else if (mode === "thinking") {
+      bodyEl.append(me);
+    } else if (a) {
+      renderTurn(a, true, mode);
+    }
+    bodyEl.scrollTop = bodyEl.scrollHeight;
+  }
+
+  // last: only the newest answer gets the Yes/Cancel buttons.
+  function renderTurn(a, last, mode) {
+    if (a.question) {
+      const me = el("div", { class: "msg me" });
+      me.append(el("div", { class: "bubble" }, a.question));
+      bodyEl.append(me);
+    }
+    if (mode === "thinking") {
       const dots = el("span", { class: "typing" });
       dots.innerHTML = "<i></i><i></i><i></i>";
       bodyEl.append(botMsg(dots));
-    } else if (a) {
-      bodyEl.append(botMsg(a.display || a.speech || ""));
-      if (a.items && a.items.length) bodyEl.append(renderItems(a.items));
-      if (a.needs_confirmation) {
-        const row = el("div", { class: "confirm" });
-        row.append(
-          el("button", { class: "pill primary", "data-act": "yes" }, t("yes")),
-          el("button", { class: "pill ghost", "data-act": "no" }, t("no"))
-        );
-        bodyEl.append(row);
-      }
+      return;
     }
-    bodyEl.scrollTop = 0;
+    if (!a.display && !a.speech) return;
+    bodyEl.append(botMsg(a.display || a.speech));
+    if (a.items && a.items.length) bodyEl.append(renderItems(a.items));
+    if (last && a.needs_confirmation) {
+      const row = el("div", { class: "confirm" });
+      row.append(
+        el("button", { class: "pill primary", "data-act": "yes" }, t("yes")),
+        el("button", { class: "pill ghost", "data-act": "no" }, t("no"))
+      );
+      bodyEl.append(row);
+    }
   }
 
   const HUES = [217, 262, 190, 152, 330, 24, 280, 200];
@@ -420,7 +440,7 @@
   async function loadState() {
     const s = await chrome.storage.local.get([
       "claudioSession", "claudioConnecting", "claudioLang", "claudioMuted",
-      "claudioConversationId", "claudioLastActivity", "claudioAnswer", "claudioPanelOpen",
+      "claudioConversationId", "claudioLastActivity", "claudioAnswer", "claudioHistory", "claudioPanelOpen",
     ]);
     state.connected = Boolean(s.claudioSession);
     state.connecting = Boolean(s.claudioConnecting);
@@ -429,7 +449,8 @@
     state.conversationId = s.claudioConversationId || null;
     state.lastActivity = s.claudioLastActivity || 0;
     state.answer = s.claudioAnswer || null;
-    if (Date.now() - state.lastActivity > CONVERSATION_IDLE_MS) resetConversation(false);
+    state.history = s.claudioHistory || [];
+    if (Date.now() - state.lastActivity > CONVERSATION_IDLE_MS) resetConversation(false, true);
     panel.classList.toggle("open", Boolean(s.claudioPanelOpen));
     render();
   }
@@ -440,7 +461,8 @@
       claudioMuted: state.muted,
       claudioConversationId: state.conversationId,
       claudioLastActivity: state.lastActivity,
-      claudioAnswer: state.answer,
+      claudioAnswer: state.busy ? null : state.answer,
+      claudioHistory: state.history,
       claudioPanelOpen: panel.classList.contains("open"),
     });
   }
@@ -454,7 +476,20 @@
     }
   });
 
-  function resetConversation(persist = true) {
+  // Moves the finished current answer into history (keeps the last 60 entries).
+  function archiveAnswer() {
+    const a = state.answer;
+    if (a && a.question && (a.display || a.speech)) {
+      state.history.push({ question: a.question, display: a.display, speech: a.speech, items: a.items || [] });
+      state.history = state.history.slice(-60);
+    }
+    state.answer = null;
+  }
+
+  function resetConversation(persist = true, keepHistory = false) {
+    archiveAnswer();
+    if (!keepHistory) state.history = [];
+    else if (state.history.length && !state.history[state.history.length - 1].divider) state.history.push({ divider: true });
     const bytes = crypto.getRandomValues(new Uint8Array(16));
     state.conversationId = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
     state.answer = null;
@@ -530,9 +565,10 @@
       render();
       return;
     }
-    if (!state.conversationId || Date.now() - state.lastActivity > CONVERSATION_IDLE_MS) resetConversation(false);
+    if (!state.conversationId || Date.now() - state.lastActivity > CONVERSATION_IDLE_MS) resetConversation(false, true);
 
     state.busy = true;
+    archiveAnswer();
     state.answer = { question: text, items: [] };
     render("thinking");
 
