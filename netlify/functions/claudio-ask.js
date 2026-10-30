@@ -239,8 +239,11 @@ async function runAsk(body, portalUser) {
   const request = {
     model: MODEL,
     max_tokens: 8000,
-    betas: ["server-side-fallback-2026-07-01"],
+    betas: ["server-side-fallback-2026-07-01", "thinking-binding-controls-2026-08-01"],
     fallbacks: "default",
+    // A deploy that changes the system prompt or skills invalidates thinking
+    // blocks saved in open conversations; drop them instead of failing with a 400.
+    thinking: { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } },
     output_config: {
       effort: process.env.CLAUDIO_EFFORT || "low",
       format: { type: "json_schema", schema: OUTPUT_SCHEMA },
