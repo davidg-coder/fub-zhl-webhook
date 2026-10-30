@@ -10,6 +10,8 @@ const MOVE_TAG = "#movetopond";
 // Leads who asked not to be contacted: DNC tag + the "DNC" pond.
 const DNC_POND_ID = 209;
 const DNC_TAG = "DNC";
+// Recruiting leads (agents we tried to recruit) who aren't a fit for the team.
+const NOT_A_FIT_POND_ID = 292;
 
 function fubAuth() {
   return "Basic " + Buffer.from(`${process.env.FUB_API_KEY}:`).toString("base64");
@@ -101,6 +103,20 @@ const SKILL_DEFS = [
     name: "mark_dnc",
     description:
       'Mark one lead Do Not Contact: tags it DNC, moves it to the "DNC" pond and logs a note saying who did it. Use it for "DNC", "do not call", "mark as do not contact", "they asked to be removed from our lists", never a plain tag change. Call first without confirmed to get a preview, read it back, and only after the agent says yes call again with confirmed=true. Use the person id of the lead on the current page or from a lookup; never guess it.',
+    input_schema: {
+      type: "object",
+      properties: {
+        personId: { type: "integer", description: "FUB person id of the lead." },
+        reason: { type: "string", description: "Why, in the agent's words, if they gave one." },
+        confirmed: { type: "boolean", description: "true only after the agent said yes to the preview." },
+      },
+      required: ["personId"],
+    },
+  },
+  {
+    name: "move_to_recruiting_not_a_fit",
+    description:
+      'Move one recruiting lead (an agent we are recruiting, not a buyer or seller) to the "Recruiting - Not a Fit" pond and log a note saying who did it. Use it for "not a fit", "move to not a fit", "this recruit is not a fit". For buyer/seller leads use move_lead_to_pond instead. Call first without confirmed to get a preview, read it back, and only after the agent says yes call again with confirmed=true. Use the person id of the lead on the current page or from a lookup; never guess it.',
     input_schema: {
       type: "object",
       properties: {
@@ -222,6 +238,52 @@ async function markDnc(input, user) {
     text: JSON.stringify({ done: true, person: { id: personId, name }, pond: "DNC", tag: DNC_TAG, noteLogged: true }),
     isError: false,
   };
+}
+
+async function moveToRecruitingNotAFit(input, user) {
+  if (!user || !user.id) return { text: "Can't tell who is signed in, so I can't move leads right now.", isError: true };
+  const personId = Number(input.personId);
+  if (!Number.isInteger(personId) || personId <= 0) return { text: "A valid personId is required.", isError: true };
+
+  const person = await fub(`/people/${personId}`);
+  const name = person.name || `${person.firstName || ""} ${person.lastName || ""}`.trim() || `Lead #${personId}`;
+  if (person.assignedPondId === NOT_A_FIT_POND_ID) {
+    return { text: `${name} is already in the Recruiting - Not a Fit pond. Nothing to do.`, isError: false };
+  }
+  // Recruiting leads often sit in a recruiting pond, so members of the lead's
+  // current pond may move it too, not just the assigned agent.
+  const isBroker = /broker|admin|owner/i.test(user.role || "");
+  let inPond = false;
+  if (!isBroker && person.assignedUserId !== user.id && person.assignedPondId) {
+    const pond = await fub(`/ponds/${person.assignedPondId}`).catch(() => null);
+    inPond = !!pond && (pond.userId === user.id || (pond.userIds || []).includes(user.id));
+  }
+  if (!isBroker && person.assignedUserId !== user.id && !inPond) {
+    return {
+      text: `${name} is assigned to ${person.assignedTo || "someone else"}, not ${user.name}. You can only move leads assigned to you or sitting in a pond you belong to.`,
+      isError: true,
+    };
+  }
+  if (!input.confirmed) {
+    return {
+      text: JSON.stringify({
+        preview: true,
+        person: { id: personId, name, stage: person.stage, assignedTo: person.assignedTo, currentPondId: person.assignedPondId || null },
+        action: `Move ${name} to the "Recruiting - Not a Fit" pond and log a note.`,
+        next: "Ask the agent to confirm, then call move_to_recruiting_not_a_fit again with confirmed=true.",
+      }),
+      isError: false,
+    };
+  }
+
+  await fub(`/people/${personId}`, { method: "PUT", body: JSON.stringify({ assignedPondId: NOT_A_FIT_POND_ID }) });
+  const reason = typeof input.reason === "string" && input.reason.trim() ? ` Reason: ${input.reason.trim().slice(0, 500)}` : "";
+  await fub("/notes", {
+    method: "POST",
+    body: JSON.stringify({ personId, subject: "Moved to Recruiting - Not a Fit via Claudio", body: `${user.name} moved this lead to the Recruiting - Not a Fit pond (via Claudio).${reason}` }),
+  });
+  console.log(`Claudio skill move_to_recruiting_not_a_fit person=${personId} by user=${user.id}`);
+  return { text: JSON.stringify({ done: true, person: { id: personId, name }, pond: "Recruiting - Not a Fit", noteLogged: true }), isError: false };
 }
 
 // Reads go through the shared API key, so they get the same ownership check
@@ -611,6 +673,7 @@ async function runSkill(name, input, user) {
   if (name === "get_pond_call_list") return getPondCallList(input || {}, user);
   if (name === "get_my_numbers") return getMyNumbers(input || {}, user);
   if (name === "mark_dnc") return markDnc(input || {}, user);
+  if (name === "move_to_recruiting_not_a_fit") return moveToRecruitingNotAFit(input || {}, user);
   if (name === "add_collaborator") return addCollaborator(input || {}, user);
   return { text: `Unknown skill ${name}.`, isError: true };
 }
