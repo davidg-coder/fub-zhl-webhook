@@ -14,9 +14,9 @@ const { fub } = require("../lib/claudio-skills");
 
 const SITE = process.env.URL || "https://fub-zhl-webhook.netlify.app";
 const ROLES = new Set(["agent", "team_lead", "admin"]);
-// Who can use Claudio in the Portal: FUB user ids, comma-separated, or "all".
-// CLAUDIO_PORTAL_USERS overrides the default (David 1024, Jeff 177) during the pilot.
-const PORTAL_USERS = (process.env.CLAUDIO_PORTAL_USERS || "1024,177").trim().toLowerCase();
+// Who can use Claudio in the Portal: FUB user ids, comma-separated, or "all"
+// (the default since the 2026-11-02 rollout). Set CLAUDIO_PORTAL_USERS to limit it again.
+const PORTAL_USERS = (process.env.CLAUDIO_PORTAL_USERS || "all").trim().toLowerCase();
 
 function secretOk(given) {
   const secret = process.env.CLAUDIO_PORTAL_SECRET;
