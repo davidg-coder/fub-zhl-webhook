@@ -10,7 +10,7 @@ const { slack, slackGet } = require("../lib/checkin");
 
 const SEND_TO = process.env.SPEND_REPORT_TO || "davidg@powerreteam.com";
 const MONTHLY_LIMIT = Number(process.env.ANTHROPIC_MONTHLY_LIMIT || 1000);
-const SOURCE_NAMES = { claudio: "Claudio in FUB", checkin: "Slack check-ins" };
+const SOURCE_NAMES = { claudio: "Claudio in FUB", checkin: "Slack check-ins", mytasks: "Meeting tasks (David)" };
 
 const usd = (n) => `$${n.toFixed(n < 10 ? 2 : 0)}`;
 const shiftDay = (day, n) => {
@@ -45,7 +45,7 @@ async function buildReport(today) {
   const nameOf = (id) => (users.find((u) => u.id === id) || {}).name || (id ? `FUB user ${id}` : "Unknown");
 
   const bySource = sumBy(week, (r) => r.source).map(
-    ([s, v]) => `• ${SOURCE_NAMES[s] || s}: *${usd(v.cost)}* · ${v.calls} ${s === "checkin" ? "plans" : "questions"} · ${usd(v.cost / v.calls)} each`
+    ([s, v]) => `• ${SOURCE_NAMES[s] || s}: *${usd(v.cost)}* · ${v.calls} ${s === "checkin" ? "plans" : s === "mytasks" ? "docs" : "questions"} · ${usd(v.cost / v.calls)} each`
   );
   const byModel = sumBy(week, (r) => r.model).map(([m, v]) => `• ${m}: ${usd(v.cost)}`);
   const byAgent = sumBy(week, (r) => r.fubUserId)

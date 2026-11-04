@@ -36,7 +36,7 @@ function costOf(model, t) {
   return (t.in * p.in + t.cacheRead * p.in * 0.1 + t.cacheWrite * p.in * 1.25 + t.out * p.out) / 1e6;
 }
 
-// source: "claudio" or "checkin". Never throws: spend tracking must not break answers.
+// source: "claudio", "checkin" or "mytasks". Never throws: spend tracking must not break answers.
 async function logUsage(source, model, total, fubUserId) {
   try {
     if (!total.in && !total.out) return;

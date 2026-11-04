@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const {
   checkinStore, slack, slackGet, verifySlack, askAboutAppointment, fubList, draftPlan, planBlocks, applyPlan, pilotReport, sendMorningPlans, FUB_APP,
 } = require("../lib/checkin");
+const { runDaily, onTaskAction, ownerChannel } = require("../lib/my-tasks");
 
 exports.handler = async (event) => {
   let body;
@@ -69,6 +70,7 @@ async function onAction(payload) {
   if (payload.type !== "block_actions") return;
   const action = (payload.actions || [])[0];
   if (!action || action.action_id === "open_fub") return;
+  if (action.action_id.startsWith("mytask_")) return onTaskAction(payload);
   const value = JSON.parse(action.value || "{}");
   const rec = await load(value.appt);
   if (!rec || rec.agent.slackId !== payload.user.id) return;
@@ -158,6 +160,11 @@ async function onMessage(ev) {
     const me = (await fubList("/users?limit=100", "users")).find((u) => String(u.email || "").toLowerCase() === String(email || "").toLowerCase());
     if (!me) await slack("chat.postMessage", { channel: ev.channel, text: `I couldn't find a FUB user with ${email}.` });
     else await sendMorningPlans({ only: me.id });
+    return;
+  }
+  // "tasks": David re-runs his meeting-task scan and reminder (lib/my-tasks.js).
+  if (/^(my )?tasks$/i.test(text) && !ev.thread_ts && ev.user === (await ownerChannel()).userId) {
+    await runDaily();
     return;
   }
   const test = text.match(/^(?:test|check-?in)(?:\s+(.*))?$/is);
