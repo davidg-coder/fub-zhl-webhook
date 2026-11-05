@@ -6,9 +6,11 @@
 const crypto = require("crypto");
 const { getStore } = require("@netlify/blobs");
 
-const MCP_URL = "https://mcp.zillow.com/api/fub-public";
-const AUTHORIZE_URL = `${MCP_URL}/authorize`;
-const TOKEN_URL = `${MCP_URL}/token`;
+// FUB/Zillow moved the MCP OAuth server to fub-mcp.zillow.com (Nov 2026); the old
+// resource value (mcp.zillow.com/api/fub-public) now makes /authorize fail.
+const MCP_URL = "https://fub-mcp.zillow.com/";
+const AUTHORIZE_URL = "https://fub-mcp.zillow.com/authorize";
+const TOKEN_URL = "https://fub-mcp.zillow.com/token";
 // Public client registered via dynamic client registration (no secret; PKCE).
 const CLIENT_ID = "189cd617-6307-465c-ad3e-b093673f6958";
 const REDIRECT_URI =
