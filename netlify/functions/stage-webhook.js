@@ -121,6 +121,48 @@ async function inheritedRecruiter(person, changes) {
   return null;
 }
 
+// The recruiting appointment tracker Sheet (read through the n8n backfill
+// webhook) records who actually RAN each appointment ("Recruiter" column), which
+// is often not the FUB assignee (e.g. Jeff assigned, Diego ran the Office
+// Consultation). It is the preferred credit source; the assignee is only a
+// fallback. Columns: 0 first, 1 last, 3 FUB link, 5 Recruiter, 13 Created on.
+const APPT_TRACKER_URL = process.env.RECRUITING_APPT_TRACKER_URL;
+
+function normName(value) {
+  return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+async function trackerRecruiter(person) {
+  if (!APPT_TRACKER_URL) return null;
+  try {
+    const res = await fetch(APPT_TRACKER_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "read_recruiting_appt_tracker" }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const rows = ((Array.isArray(data) ? data[0] : data) || {}).values || [];
+    const fullName = normName(`${person.firstName || ""} ${person.lastName || ""}`);
+    const matches = (byId) => rows.slice(1).filter((r) => {
+      const recruiter = String(r[5] || "").trim();
+      if (!MET_TAKERS.has(recruiter)) return false;
+      if (byId) {
+        const m = String(r[3] || "").match(/\/people\/view\/(\d+)/);
+        return m && Number(m[1]) === Number(person.id);
+      }
+      return fullName && normName(`${r[0] || ""} ${r[1] || ""}`) === fullName;
+    });
+    const hits = matches(true).length ? matches(true) : matches(false);
+    if (!hits.length) return null;
+    hits.sort((a, b) => (Number(a[13]) || Number(a[6]) || 0) - (Number(b[13]) || Number(b[6]) || 0));
+    return String(hits[hits.length - 1][5]).trim();
+  } catch (err) {
+    console.error("appt tracker lookup failed", person.id, err);
+    return null;
+  }
+}
+
 function authHeader() {
   return "Basic " + Buffer.from(`${process.env.FUB_API_KEY}:`).toString("base64");
 }
@@ -272,9 +314,12 @@ exports.handler = async (event) => {
     if (person && !person[RECRUITED_BY_FIELD]) {
       try {
         const key = stageKey(newStage);
-        const recruiter = key === "met" && MET_TAKERS.has(agent)
-          ? agent
-          : CREDIT_CARRY_KEYS.has(key) ? await inheritedRecruiter(person, changes) : null;
+        let recruiter = null;
+        if (key === "met") {
+          recruiter = (await trackerRecruiter(person)) || (MET_TAKERS.has(agent) ? agent : null);
+        } else if (CREDIT_CARRY_KEYS.has(key)) {
+          recruiter = (await inheritedRecruiter(person, changes)) || (await trackerRecruiter(person));
+        }
         if (recruiter) await setStageFieldTimestamp(personId, RECRUITED_BY_FIELD, recruiter);
       } catch (err) {
         console.error("recruiter credit failed", personId, err);
